@@ -23,8 +23,10 @@ from requests.adapters import HTTPAdapter
 
 from urllib3.util.retry import Retry
 
-from uuid import UUID, uuid4
+from fastapi import Request, Depends
 
+from uuid import UUID, uuid4
+from sqlalchemy import text
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -36,10 +38,15 @@ from pydantic import BaseModel, Field, HttpUrl
 from sqlalchemy import select, func
 
 
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
+
+
+from typing import Any, List, Optional, Union
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from starlette.middleware.sessions import SessionMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -67,14 +74,7 @@ app = FastAPI()
 # ------------------------------------------------------------------------------
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
 COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "0") == "1"
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=SESSION_SECRET,
-    https_only=COOKIE_SECURE,
-    same_site="lax",
-)
-
+_SOLR_SESSION: requests.Session | None = None
 # ------------------------------------------------------------------------------
 # Static + Templates (mount ONCE)
 # ------------------------------------------------------------------------------
@@ -89,11 +89,21 @@ app.state.templates = Jinja2Templates(directory=TEMPLATES_DIR)
 # ------------------------------------------------------------------------------
 # Routers (include ONCE)
 # ------------------------------------------------------------------------------
-from app.auth.routes import router as auth_router
+from app.auth.router import router as auth_router
 from app.ui.routes import router as ui_router
 
 app.include_router(auth_router)
 app.include_router(ui_router)
+
+
+from app.auth.router import router as auth_router
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("SESSION_SECRET", "CHANGE_ME_TO_LONG_RANDOM_SECRET"),
+    same_site="lax",
+    https_only=False,  # set True in production behind HTTPS
+)
 
 # ------------------------------------------------------------------------------
 # Env / constants
@@ -653,71 +663,6 @@ def csv_safe_col(s: str) -> str:
     return f"code__{base}"
 
 
-def build_wide_aggregates(
-    db,
-    doc_ids: list[str],
-    canon_version: dict[str, str],
-    alias_to_canon: dict[str, str],
-    key_to_canon: dict[str, str],
-    *,
-    version: str = "all",     # v1|ext|all
-    code_filter: str | None = None,
-) -> tuple[dict[str, dict[str, dict]], set[str]]:
-    """
-    Returns:
-      - per_doc: doc_id -> canonical_code -> metrics dict
-      - codes_seen: set of canonical_code
-    Metrics dict contains:
-      { "count": int, "latest_value": str|None, "latest_updated": datetime|None }
-    """
-    per_doc: dict[str, dict[str, dict]] = {}
-    codes_seen: set[str] = set()
-
-    stmt = select(
-        HypothesisAnnotation.document_id,
-        HypothesisAnnotation.tags,
-        HypothesisAnnotation.text,
-        HypothesisAnnotation.updated,
-    ).where(HypothesisAnnotation.document_id.in_(doc_ids))
-
-    for doc_id, tags, text, updated in db.execute(stmt).yield_per(5000):
-        if not doc_id:
-            continue
-
-        resolved = resolve_codes_for_tags_cached(tags or [], canon_version, alias_to_canon, key_to_canon)
-        if not resolved:
-            continue
-
-        val = (text or "").strip()
-        upd = parse_dt_utc(updated)
-
-        for canonical_code, code_ver in resolved:
-            if code_filter and canonical_code != code_filter:
-                continue
-            if version != "all" and code_ver != version:
-                continue
-
-            codes_seen.add(canonical_code)
-
-            doc_bucket = per_doc.setdefault(doc_id, {})
-            rec = doc_bucket.get(canonical_code)
-            if not rec:
-                rec = {"count": 0, "latest_value": None, "latest_updated": None}
-                doc_bucket[canonical_code] = rec
-
-            rec["count"] += 1
-
-            if val:
-                if upd:
-                    if rec["latest_updated"] is None or upd > rec["latest_updated"]:
-                        rec["latest_updated"] = upd
-                        rec["latest_value"] = val
-                else:
-                    if rec["latest_value"] is None:
-                        rec["latest_value"] = val
-
-    return per_doc, codes_seen
-
 # ------------------------------------------------------------------------------
 # Solr helpers
 # ------------------------------------------------------------------------------
@@ -886,103 +831,6 @@ def solr_set_project_membership(core: str, doc_to_projects: dict[str, set[str]])
     return updated
 
 
-# def solr_select(core: str, params: dict) -> dict:
-#     """
-#     Robust Solr select wrapper.
-#
-#     Fixes / improvements:
-#     - Ensures list-valued params (e.g., fq, facet.field) are encoded correctly by requests.
-#       Requests *can* handle list values, but we normalize to a list-of-tuples to avoid edge cases.
-#     - Adds basic debug logging (without dumping huge params) to diagnose "no results".
-#     - Gracefully handles Solr errors with an informative exception payload.
-#
-#     SOLR_BASE_URL may be:
-#       - http://solr:8983/solr        (common in docker)
-#       - http://solr:8983            (less common)
-#     This function handles both safely.
-#     """
-#     _require_solr()
-#     base = SOLR_BASE_URL.rstrip("/")
-#
-#     # If base already ends with /solr, don't add another /solr
-#     if base.endswith("/solr"):
-#         url = f"{base}/{core}/select"
-#     else:
-#         url = f"{base}/solr/{core}/select"
-#
-#     # --- normalize params so repeated keys are sent correctly ---
-#     # requests supports dict with list values, but normalizing to tuples is safer
-#     def _flatten_params(p: dict) -> list[tuple[str, str]]:
-#         out: list[tuple[str, str]] = []
-#         for k, v in (p or {}).items():
-#             if v is None:
-#                 continue
-#             if isinstance(v, (list, tuple)):
-#                 for item in v:
-#                     if item is None:
-#                         continue
-#                     out.append((str(k), str(item)))
-#             else:
-#                 out.append((str(k), str(v)))
-#         return out
-#
-#     flat_params = _flatten_params(params)
-#
-#     # Small, helpful debug (won't spam logs with huge strings)
-#     try:
-#         logger.debug(
-#             "Solr select",
-#             extra={
-#                 "core": core,
-#                 "url": url,
-#                 "q": params.get("q"),
-#                 "rows": params.get("rows"),
-#                 "start": params.get("start"),
-#                 "fq_count": len(params.get("fq") or []) if isinstance(params.get("fq"), (list, tuple)) else (1 if params.get("fq") else 0),
-#                 "facet": params.get("facet"),
-#             },
-#         )
-#     except Exception:
-#         pass
-#
-#     try:
-#         r = requests.get(url, params=flat_params, timeout=60)
-#         r.raise_for_status()
-#         return r.json()
-#     except requests.HTTPError as e:
-#         # Try to surface Solr error body (very useful when it 400s)
-#         body = None
-#         try:
-#             body = r.text  # type: ignore[name-defined]
-#         except Exception:
-#             body = None
-#         raise HTTPException(
-#             status_code=502,
-#             detail={
-#                 "error": "Solr request failed",
-#                 "core": core,
-#                 "url": url,
-#                 "status": getattr(r, "status_code", None),  # type: ignore[name-defined]
-#                 "body": body[:2000] if isinstance(body, str) else body,
-#             },
-#         ) from e
-#     except Exception as e:
-#         raise HTTPException(
-#             status_code=502,
-#             detail={
-#                 "error": "Solr request error",
-#                 "core": core,
-#                 "url": url,
-#                 "message": str(e),
-#             },
-#         ) from e
-
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
-_SOLR_SESSION: requests.Session | None = None
-
 def _get_solr_session() -> requests.Session:
     global _SOLR_SESSION
     if _SOLR_SESSION is not None:
@@ -1077,10 +925,6 @@ def solr_escape_term(s: str) -> str:
     return re.sub(r'([+\-!(){}[\]^"~*?:\\/]|&&|\|\|)', r'\\\1', s)
 
 
-# def solr_escape_term(s: str) -> str:
-#     return re.sub(r'([+\-!(){}\[\]^"~*?:\\/]|&&|\|\|)', r'\\\1', s)
-
-
 def normalize_fq_list(fq):
     if fq is None:
         return []
@@ -1088,36 +932,6 @@ def normalize_fq_list(fq):
         return [fq]
     return [x for x in fq if x]
 
-
-
-# def normalize_fq(fq: str) -> str:
-#     """
-#     Convert fq strings like:
-#       review_status_by_project_ss:5749...:done
-#     into:
-#       review_status_by_project_ss:"5749...:done"
-#     so Solr doesn't choke on ':' inside the value.
-#     """
-#     fq = (fq or "").strip()
-#     if not fq or ":" not in fq:
-#         return fq
-#
-#     # don't touch already-quoted fq or local params
-#     if '"' in fq or fq.lstrip().startswith("{!"):
-#         return fq
-#
-#     field, value = fq.split(":", 1)
-#     field = field.strip()
-#     value = value.strip()
-#
-#     if not field or not value:
-#         return fq
-#
-#     if _SOLR_NEEDS_QUOTES.search(value):
-#         value = value.replace("\\", "\\\\").replace('"', '\\"')
-#         return f'{field}:"{value}"'
-#
-#     return fq
 
 def normalize_fq(fq: str) -> str:
     """
@@ -1166,34 +980,6 @@ def normalize_fq(fq: str) -> str:
     return fq
 
 
-# def normalize_fl(fl: Optional[Union[str, List[str]]]) -> Optional[str]:
-#     """
-#     Accepts:
-#       - fl="a,b,c"
-#       - fl=["a", "b", "c"]
-#       - fl=["a,b", "c"]
-#     Returns a comma-joined string.
-#     """
-#     if not fl:
-#         return None
-#
-#     parts: List[str] = []
-#
-#     if isinstance(fl, list):
-#         for item in fl:
-#             for p in str(item).split(","):
-#                 p = p.strip()
-#                 if p:
-#                     parts.append(p)
-#     else:
-#         for p in str(fl).split(","):
-#             p = p.strip()
-#             if p:
-#                 parts.append(p)
-#
-#     return ",".join(parts) if parts else None
-
-from typing import Any, List, Optional, Union
 
 def normalize_fl(fl: Optional[Union[str, List[str]]]) -> Optional[str]:
     """
@@ -1293,91 +1079,6 @@ def solr_update_review_status(core: str, updates: list[dict]) -> int:
         updated += len(batch)
     return updated
 
-
-# def solr_update_topics_for_docs(
-#     core: str,
-#     doc_to_topics: Dict[str, List[Dict[str, Any]]],
-#     *,
-#     run_id: str,
-#     schema_version: Optional[str] = None,
-# ) -> int:
-#     """
-#     doc_to_topics: doc_id -> list of {topic_key, topic_label, score}
-#     Writes or clears:
-#       - topics_ss
-#       - topic_keys_ss
-#       - topic_kv_ss (e.g. T01=0.82)
-#       - has_topics_b
-#       - topic_run_id_s
-#       - schema_versions_ss (optional add)
-#     """
-#     if not doc_to_topics:
-#         return 0
-#
-#     atomic_docs: List[dict] = []
-#
-#     for doc_id, items in doc_to_topics.items():
-#
-#         # ----------------------------------------
-#         # CASE 1: NO ACTIVE TOPICS → CLEAR IN SOLR
-#         # ----------------------------------------
-#         if not items:
-#             atomic = {
-#                 "document_id_s": doc_id,
-#                 "has_topics_b": {"set": False},
-#                 # "topic_run_id_s": {"set": None},
-#                 "topic_run_id_s": {"set": str(run_id)},
-#                 "topics_ss": {"set": []},
-#                 "topic_keys_ss": {"set": []},
-#                 "topic_kv_ss": {"set": []},
-#             }
-#             atomic_docs.append(atomic)
-#             continue
-#
-#         # ----------------------------------------
-#         # CASE 2: ACTIVE TOPICS → NORMAL SET
-#         # ----------------------------------------
-#         labels: List[str] = []
-#         keys: List[str] = []
-#         kv: List[str] = []
-#
-#         for it in items:
-#             k = (it.get("topic_key") or "").strip()
-#             lab = (it.get("topic_label") or "").strip()
-#             sc = it.get("score")
-#
-#             if k:
-#                 keys.append(k)
-#             if lab:
-#                 labels.append(lab)
-#
-#             if k and sc is not None:
-#                 try:
-#                     kv.append(f"{k}={float(sc):.4f}")
-#                 except Exception:
-#                     kv.append(f"{k}={sc}")
-#
-#         atomic = {
-#             "document_id_s": doc_id,
-#             "has_topics_b": {"set": True},
-#             "topic_run_id_s": {"set": str(run_id)},
-#             "topics_ss": {"set": sorted(set(labels))},
-#             "topic_keys_ss": {"set": sorted(set(keys))},
-#             "topic_kv_ss": {"set": sorted(set(kv))},
-#         }
-#
-#         if schema_version:
-#             atomic["schema_versions_ss"] = {"add": schema_version}
-#
-#         atomic_docs.append(atomic)
-#
-#     updated = 0
-#     for batch in chunked(atomic_docs, 500):
-#         solr_atomic_update(core, batch, commit_within_ms=5000)
-#         updated += len(batch)
-#
-#     return updated
-#
 
 def solr_update_topics_for_docs(
     core: str,
@@ -1614,11 +1315,17 @@ class HypothesisSyncRequest(BaseModel):
 
 
 # Optional: if your frontend expects these (Fix 2)
+# class CreateProjectIn(BaseModel):
+#     team_id: Optional[str] = None
+#     team_name: Optional[str] = None
+#     name: str = "Untitled Project"
+
 class CreateProjectIn(BaseModel):
     team_id: Optional[str] = None
     team_name: Optional[str] = None
     name: str = "Untitled Project"
-
+    description: Optional[str] = Field(default=None, max_length=1000)
+    creator_user_id: Optional[str] = None  # optional UUID string
 
 class CreateProjectOut(BaseModel):
     team_id: str
@@ -1632,6 +1339,7 @@ class TeamCreateRequest(BaseModel):
 class ProjectCreateRequest(BaseModel):
     team_id: UUID
     name: str = Field(..., min_length=1)
+    description: str | None = Field(default=None, max_length=1000)
 
 class ProjectAddDocsRequest(BaseModel):
     document_ids: list[str] = Field(..., min_length=1)
@@ -1714,67 +1422,191 @@ def solr_commit(core: str):
 # ------------------------------------------------------------------------------
 # Projects endpoints (Fix 2: global core model)
 # ------------------------------------------------------------------------------
+#
+# @app.post("/projects/bootstrap", response_model=CreateProjectOut)
+# def create_project_bootstrap(payload: CreateProjectIn, request: Request):
+#     """
+#     Global core model: projects do NOT create per-project Solr cores. changed the name
+#     create_project_bootstrap from create_project as there is another function
+#     """
+#     db = SessionLocal()
+#     try:
+#         # Resolve / create team
+#         team = None
+#         if payload.team_id:
+#             team = db.get(Team, payload.team_id)
+#             if not team:
+#                 raise HTTPException(status_code=404, detail=f"Team not found: {payload.team_id}")
+#
+#         if not team:
+#             # Try find by name, else create
+#             team_name = (payload.team_name or "Default Team").strip()
+#             team = db.execute(select(Team).where(Team.name == team_name)).scalars().first()
+#             if not team:
+#                 team = Team(team_id=str(uuid4()), name=team_name)
+#                 db.add(team)
+#                 db.commit()
+#
+#         # proj = Project(project_id=str(uuid4()), team_id=str(team.team_id), name=payload.name)
+#         proj = Project(
+#             project_id=str(uuid4()),
+#             team_id=str(team.team_id),
+#             name=(payload.name or "").strip(),
+#             description=(payload.description or "").strip() or None,
+#         )
+#
+#         db.add(proj)
+#         db.commit()
+#
+#         # creator_id = None
+#
+#         user = get_current_user(request)
+#         creator_user_id = user.get("user_id")
+#         if not creator_user_id:
+#             raise HTTPException(500, detail="Session user_id missing")
+#
+#         if payload.creator_user_id:
+#             try:
+#                 creator_id = str(UUID(payload.creator_user_id))
+#             except Exception:
+#                 creator_id = None
+#         if payload.creator_user_id:
+#             db.execute(
+#                 text("""
+#                      INSERT INTO project_members (project_id, user_id, role)
+#                      VALUES (:pid, :uid, 'owner') ON CONFLICT (project_id, user_id) DO NOTHING
+#                      """),
+#                 {"pid": str(proj.project_id), "uid": payload.creator_user_id},
+#             )
+#             db.commit()
+#         # Global core: no core creation
+#         core_name = SOLR_GLOBAL_CORE
+#
+#         return CreateProjectOut(
+#             team_id=str(team.team_id),
+#             project_id=str(proj.project_id),
+#             solr_core=core_name,
+#         )
+#     finally:
+#         db.close()
 
 @app.post("/projects/bootstrap", response_model=CreateProjectOut)
-def create_project_bootstrap(payload: CreateProjectIn):
+def create_project_bootstrap(payload: CreateProjectIn, request: Request):
     """
-    Global core model: projects do NOT create per-project Solr cores. changed the name
-    create_project_bootstrap from create_project as there is another function
+    Global core model: projects do NOT create per-project Solr cores.
+    Also: add the creator as owner in project_members.
     """
     db = SessionLocal()
     try:
-        # Resolve / create team
+        # -----------------------------
+        # Team resolve/create
+        # -----------------------------
         team = None
         if payload.team_id:
-            team = db.get(Team, payload.team_id)
+            try:
+                team_uuid = UUID(str(payload.team_id))
+            except Exception:
+                raise HTTPException(status_code=400, detail="team_id must be a valid UUID")
+            team = db.get(Team, team_uuid)
             if not team:
                 raise HTTPException(status_code=404, detail=f"Team not found: {payload.team_id}")
 
         if not team:
-            # Try find by name, else create
             team_name = (payload.team_name or "Default Team").strip()
             team = db.execute(select(Team).where(Team.name == team_name)).scalars().first()
             if not team:
-                team = Team(team_id=str(uuid4()), name=team_name)
+                team = Team(team_id=uuid.uuid4(), name=team_name)
                 db.add(team)
                 db.commit()
+                db.refresh(team)
 
-        proj = Project(project_id=str(uuid4()), team_id=str(team.team_id), name=payload.name)
+        # -----------------------------
+        # Create project
+        # -----------------------------
+        proj = Project(
+            project_id=uuid.uuid4(),
+            team_id=team.team_id,
+            name=(payload.name or "Untitled Project").strip(),
+            description=(payload.description or "").strip() or None,
+        )
         db.add(proj)
         db.commit()
+        db.refresh(proj)
 
-        # Global core: no core creation
-        core_name = SOLR_GLOBAL_CORE
+        # -----------------------------
+        # Membership: add creator as owner
+        # -----------------------------
+        sess_user = get_current_user(request)
+        session_user_id = sess_user.get("id")  # ✅ correct key for your users table
 
+        if not session_user_id:
+            raise HTTPException(status_code=500, detail="Session user id missing")
+
+        # Allow override but validate; else use session id
+        creator_user_id = session_user_id
+        if payload.creator_user_id:
+            try:
+                creator_user_id = str(UUID(str(payload.creator_user_id)))
+            except Exception:
+                raise HTTPException(status_code=400, detail="creator_user_id must be a valid UUID")
+
+        # Insert membership row
+        db.execute(
+            text("""
+                INSERT INTO project_members (project_id, user_id, role)
+                VALUES (:pid, :uid, 'owner')
+                ON CONFLICT (project_id, user_id) DO NOTHING
+            """),
+            {"pid": str(proj.project_id), "uid": str(creator_user_id)},
+        )
+        db.commit()
+
+        # Global core: no per-project core
         return CreateProjectOut(
             team_id=str(team.team_id),
             project_id=str(proj.project_id),
-            solr_core=core_name,
+            solr_core=SOLR_GLOBAL_CORE,
         )
+
     finally:
         db.close()
 
 
+# @app.delete("/projects/{project_id}")
+# def delete_project(project_id: str, delete_solr_core: bool = True):
+#     """
+#     Global core should never be deleted as part of a project delete.
+#     """
+#     db = SessionLocal()
+#     try:
+#         proj = db.get(Project, project_id)
+#         if not proj:
+#             raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+#
+#         core_name = SOLR_GLOBAL_CORE
+#
+#         db.delete(proj)
+#         db.commit()
+#
+#         return {"ok": True, "project_id": project_id, "solr_core": core_name, "deleted_solr_core": False}
+#     finally:
+#         db.close()
 @app.delete("/projects/{project_id}")
-def delete_project(project_id: str, delete_solr_core: bool = True):
-    """
-    Global core should never be deleted as part of a project delete.
-    """
+def delete_project(project_id: UUID, request: Request):
+    uid = current_user_id(request)
     db = SessionLocal()
     try:
+        assert_project_member(db, project_id, uid)
+
         proj = db.get(Project, project_id)
         if not proj:
-            raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
-
-        core_name = SOLR_GLOBAL_CORE
+            raise HTTPException(404, "Project not found")
 
         db.delete(proj)
         db.commit()
-
-        return {"ok": True, "project_id": project_id, "solr_core": core_name, "deleted_solr_core": False}
+        return {"ok": True, "project_id": str(project_id), "deleted_solr_core": False}
     finally:
         db.close()
-
 
 # ------------------------------------------------------------------------------
 # Hypothesis helpers (patched: URL normalization + bulk resolve)
@@ -1846,49 +1678,6 @@ def hypothesis_iter_group_annotations(
 
         params["search_after"] = new_cursor
         last_cursor = new_cursor
-
-
-# def hypothesis_get_profile() -> dict:
-#     r = requests.get(f"{HYPOTHESIS_API_BASE}/profile", headers=_hyp_headers(), timeout=60)
-#     if r.status_code >= 300:
-#         raise HTTPException(status_code=500, detail=f"Hypothesis profile failed: {r.status_code} {r.text[:800]}")
-#     return r.json()
-#
-#
-# def hypothesis_iter_group_annotations(
-#     group_id: str,
-#     limit: int = 200,
-#     search_after: Optional[str] = None,
-# ) -> Iterable[dict]:
-#     """
-#     Incremental fetch using search_after on updated.
-#     """
-#     params = {
-#         "group": group_id,
-#         "sort": "updated",
-#         "order": "asc",
-#         "limit": int(limit),
-#     }
-#     if search_after:
-#         params["search_after"] = search_after
-#
-#     while True:
-#         r = requests.get(f"{HYPOTHESIS_API_BASE}/search", params=params, headers=_hyp_headers(), timeout=60)
-#         if r.status_code >= 300:
-#             raise HTTPException(status_code=500, detail=f"Hypothesis search failed: {r.status_code} {r.text[:800]}")
-#
-#         data = r.json()
-#         rows = data.get("rows", []) or []
-#         if not rows:
-#             break
-#
-#         for a in rows:
-#             yield a
-#
-#         last_updated = rows[-1].get("updated")
-#         if not last_updated:
-#             break
-#         params["search_after"] = last_updated
 
 
 def snapshot_path_for_group(group_id: str) -> str:
@@ -2693,8 +2482,317 @@ def deactivate_code(code: str):
 # curl -L -o out.csv ("http://localhost:8000/export/csv?project_id=YOUR_PROJECT_ID&version=v1"
 
 ################################################################################################
+def _normalize_tags(tags: Any) -> list[str]:
+    """
+    Make HypothesisAnnotation.tags safe/consistent as list[str].
+
+    Handles:
+      - list[str]
+      - tuple[str]
+      - JSON string: '["A","B"]'
+      - None
+      - other -> best-effort
+    """
+    if tags is None:
+        return []
+
+    # Already list-like
+    if isinstance(tags, (list, tuple)):
+        out: list[str] = []
+        for t in tags:
+            if t is None:
+                continue
+            s = str(t).strip()
+            if s:
+                out.append(s)
+        return out
+
+    # If psycopg/SQLAlchemy returns JSON as string
+    if isinstance(tags, str):
+        s = tags.strip()
+        if not s:
+            return []
+        # attempt JSON parse
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except Exception:
+            pass
+        # fallback: treat as single tag
+        return [s]
+
+    # dict / other types (rare)
+    try:
+        return [str(tags).strip()] if str(tags).strip() else []
+    except Exception:
+        return []
+
+
+def build_wide_aggregates(
+    db,
+    doc_ids: list[str],
+    canon_version: dict[str, str],
+    alias_to_canon: dict[str, str],
+    key_to_canon: dict[str, str],
+    *,
+    version: str = "all",
+    code_filter: Optional[str] = None,
+) -> tuple[dict[str, dict[str, dict]], set[str]]:
+    """
+    Build per-doc aggregates and the set of codes seen, for /export/csv_wide.
+
+    Returns:
+      per_doc: {doc_id: {canonical_code: {latest_value, latest_updated, count}}}
+      codes_seen: set of canonical_code
+    """
+    per_doc: dict[str, dict[str, dict]] = {}
+    codes_seen: set[str] = set()
+
+    stmt = select(
+        HypothesisAnnotation.document_id,
+        HypothesisAnnotation.tags,
+        HypothesisAnnotation.text,
+        HypothesisAnnotation.updated,
+    ).where(HypothesisAnnotation.document_id.in_(doc_ids))
+
+    for doc_id, tags, text, updated in db.execute(stmt).yield_per(5000):
+        if not doc_id:
+            continue
+
+        tag_list = _normalize_tags(tags)
+
+        resolved = resolve_codes_for_tags_cached(
+            tag_list, canon_version, alias_to_canon, key_to_canon
+        )
+        if not resolved:
+            continue
+
+        val = (text or "").strip()
+        upd = parse_dt_utc(updated)
+
+        bucket = per_doc.setdefault(doc_id, {})
+
+        for canonical_code, code_ver in resolved:
+            if code_filter and canonical_code != code_filter:
+                continue
+            if version != "all" and code_ver != version:
+                continue
+
+            codes_seen.add(canonical_code)
+
+            rec = bucket.get(canonical_code)
+            if not rec:
+                rec = {
+                    "count": 0,
+                    "latest_value": None,
+                    "latest_updated": None,
+                }
+                bucket[canonical_code] = rec
+
+            rec["count"] += 1
+
+            if val:
+                if upd:
+                    if rec["latest_updated"] is None or upd > rec["latest_updated"]:
+                        rec["latest_updated"] = upd
+                        rec["latest_value"] = val
+                else:
+                    if rec["latest_value"] is None:
+                        rec["latest_value"] = val
+
+    return per_doc, codes_seen
+
+
+# @app.get("/export/csv")
+# def export_csv(
+#     project_id: UUID,
+#     core: str = "hitl_test",
+#     document_id: Optional[str] = None,
+#     document_ids: Optional[str] = None,
+#     code: Optional[str] = None,
+#     version: str = "all",
+#     source: str = "human",
+#     include_annotators: bool = False,
+# ):
+#     """
+#     Production-grade long/tidy export:
+#       one row per (document_id, code)
+#
+#     Values:
+#       - value: latest non-empty annotation.text
+#       - values: JSON array string of all unique non-empty texts
+#       - has_span + span_examples
+#     """
+#     if source not in {"human", "all"}:
+#         raise HTTPException(400, "source supports: human|all (model export not implemented yet)")
+#
+#     if version not in {"v1", "ext", "all"}:
+#         raise HTTPException(400, "version must be v1|ext|all")
+#
+#     db = SessionLocal()
+#     try:
+#         # 1) determine doc set (project-scoped)
+#         doc_ids = iter_project_document_ids(db, str(project_id), document_id=document_id, document_ids=document_ids)
+#         doc_ids = list(doc_ids) if doc_ids else []
+#         if not doc_ids:
+#             raise HTTPException(404, "No documents matched (check project membership and document_id(s))")
+#
+#         # 2) preload doc_id -> canonical_url
+#         doc_rows = db.execute(
+#             select(Document.document_id, Document.canonical_url).where(Document.document_id.in_(doc_ids))
+#         ).all()
+#         doc_url = {d: u for (d, u) in doc_rows}
+#
+#         # 3) preload code maps ONCE
+#         canon_version, alias_to_canon, key_to_canon = load_code_maps(db)
+#
+#         # If caller provided `code=...`, normalize it to canonical too
+#         code_filter: Optional[str] = None
+#         if code:
+#             cf = resolve_tag_to_canonical(code, canon_version, alias_to_canon, key_to_canon)
+#             if not cf:
+#                 code_filter = "__NO_MATCH__"
+#             else:
+#                 code_filter = cf
+#
+#         headers = [
+#             "project_id",
+#             "document_id",
+#             "canonical_url",
+#             "code",
+#             "code_version",
+#             "source",
+#             "value",
+#             "value_mode",
+#             "values",
+#             "n_values",
+#             "has_span",
+#             "span_examples",
+#             "n_annotations",
+#             "latest_updated",
+#         ]
+#         if include_annotators:
+#             headers.append("annotators")
+#
+#         def gen():
+#             buf = io.StringIO()
+#             w = csv.DictWriter(buf, fieldnames=headers)
+#             w.writeheader()
+#             yield buf.getvalue()
+#             buf.seek(0)
+#             buf.truncate(0)
+#
+#             if code_filter == "__NO_MATCH__":
+#                 return  # header-only
+#
+#             agg: dict[tuple[str, str], dict] = {}
+#
+#             stmt = select(
+#                 HypothesisAnnotation.document_id,
+#                 HypothesisAnnotation.tags,
+#                 HypothesisAnnotation.text,
+#                 HypothesisAnnotation.exact,
+#                 HypothesisAnnotation.user,
+#                 HypothesisAnnotation.updated,
+#             ).where(HypothesisAnnotation.document_id.in_(doc_ids))
+#
+#             for doc_id, tags, text, exact, user, updated in db.execute(stmt).yield_per(5000):
+#                 if not doc_id:
+#                     continue
+#
+#                 tag_list = _normalize_tags(tags)
+#
+#                 resolved = resolve_codes_for_tags_cached(tag_list, canon_version, alias_to_canon, key_to_canon)
+#                 if not resolved:
+#                     continue
+#
+#                 val = (text or "").strip()
+#                 upd = parse_dt_utc(updated)
+#
+#                 for canonical_code, code_ver in resolved:
+#                     if code_filter and canonical_code != code_filter:
+#                         continue
+#                     if version != "all" and code_ver != version:
+#                         continue
+#
+#                     key = (doc_id, canonical_code)
+#                     rec = agg.get(key)
+#                     if not rec:
+#                         rec = {
+#                             "code_version": code_ver,
+#                             "n_annotations": 0,
+#                             "has_span": False,
+#                             "span_examples": [],
+#                             "values_set": set(),
+#                             "latest_value": None,
+#                             "latest_updated": None,
+#                             "annotators": set(),
+#                         }
+#                         agg[key] = rec
+#
+#                     rec["n_annotations"] += 1
+#
+#                     if user:
+#                         rec["annotators"].add(user)
+#
+#                     if exact and str(exact).strip():
+#                         rec["has_span"] = True
+#                         ex = str(exact).strip()
+#                         if ex and ex not in rec["span_examples"] and len(rec["span_examples"]) < 3:
+#                             rec["span_examples"].append(ex)
+#
+#                     if val:
+#                         rec["values_set"].add(val)
+#                         if upd:
+#                             if rec["latest_updated"] is None or upd > rec["latest_updated"]:
+#                                 rec["latest_updated"] = upd
+#                                 rec["latest_value"] = val
+#                         else:
+#                             if rec["latest_value"] is None:
+#                                 rec["latest_value"] = val
+#
+#             for (doc_id, canonical_code) in sorted(agg.keys()):
+#                 rec = agg[(doc_id, canonical_code)]
+#                 values_list = sorted(list(rec["values_set"]))
+#                 values_json = json.dumps(values_list, ensure_ascii=False)
+#
+#                 row = {
+#                     "project_id": str(project_id),
+#                     "document_id": doc_id,
+#                     "canonical_url": doc_url.get(doc_id) or "",
+#                     "code": canonical_code,
+#                     "code_version": rec["code_version"],
+#                     "source": "human",
+#                     "value": rec["latest_value"] or "",
+#                     "value_mode": "latest_nonempty_text",
+#                     "values": values_json,
+#                     "n_values": len(values_list),
+#                     "has_span": bool(rec["has_span"]),
+#                     "span_examples": " || ".join(rec["span_examples"]) if rec["span_examples"] else "",
+#                     "n_annotations": rec["n_annotations"],
+#                     "latest_updated": iso_z(rec["latest_updated"]),
+#                 }
+#                 if include_annotators:
+#                     row["annotators"] = ";".join(sorted(rec["annotators"])) if rec["annotators"] else ""
+#
+#                 w.writerow(row)
+#                 yield buf.getvalue()
+#                 buf.seek(0)
+#                 buf.truncate(0)
+#
+#         filename = f"export_project_{project_id}.csv"
+#         return StreamingResponse(
+#             gen(),
+#             media_type="text/csv",
+#             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+#         )
+#     finally:
+#         db.close()
+
 @app.get("/export/csv")
 def export_csv(
+    request: Request,
     project_id: UUID,
     core: str = "hitl_test",
     document_id: Optional[str] = None,
@@ -2704,65 +2802,38 @@ def export_csv(
     source: str = "human",
     include_annotators: bool = False,
 ):
-    """
-    Production-grade long/tidy export:
-      one row per (document_id, code)
-
-    Values:
-      - value: latest non-empty annotation.text
-      - values: JSON array string of all unique non-empty texts
-      - has_span + span_examples
-    """
     if source not in {"human", "all"}:
-        # model not implemented yet
         raise HTTPException(400, "source supports: human|all (model export not implemented yet)")
-
     if version not in {"v1", "ext", "all"}:
         raise HTTPException(400, "version must be v1|ext|all")
 
+    uid = current_user_id(request)
+
     db = SessionLocal()
-
     try:
-        # 1) determine doc set (project-scoped)
-        doc_ids = iter_project_document_ids(db, str(project_id), document_id=document_id, document_ids=document_ids)
-        if not doc_ids:
-            raise HTTPException(404, "No documents matched (check project membership and document_id(s))")
+        assert_project_member(db, project_id, uid)
 
-        # 2) preload doc_id -> canonical_url
+        doc_ids = iter_project_document_ids(db, str(project_id), document_id=document_id, document_ids=document_ids)
+        doc_ids = list(doc_ids) if doc_ids else []
+        if not doc_ids:
+            raise HTTPException(404, "No documents matched")
+
         doc_rows = db.execute(
             select(Document.document_id, Document.canonical_url).where(Document.document_id.in_(doc_ids))
         ).all()
         doc_url = {d: u for (d, u) in doc_rows}
 
-        # 3) preload code maps ONCE (fast; avoids DB hits per annotation)
         canon_version, alias_to_canon, key_to_canon = load_code_maps(db)
 
-        # If caller provided `code=...`, normalize it to canonical too
         code_filter: Optional[str] = None
         if code:
             cf = resolve_tag_to_canonical(code, canon_version, alias_to_canon, key_to_canon)
-            if not cf:
-                # if they asked for an unknown/unregistered code, return empty CSV (header only)
-                code_filter = "__NO_MATCH__"
-            else:
-                code_filter = cf
+            code_filter = cf or "__NO_MATCH__"
 
-        # 4) stream CSV
         headers = [
-            "project_id",
-            "document_id",
-            "canonical_url",
-            "code",
-            "code_version",
-            "source",
-            "value",
-            "value_mode",
-            "values",
-            "n_values",
-            "has_span",
-            "span_examples",
-            "n_annotations",
-            "latest_updated",
+            "project_id","document_id","canonical_url","code","code_version","source",
+            "value","value_mode","values","n_values","has_span","span_examples",
+            "n_annotations","latest_updated",
         ]
         if include_annotators:
             headers.append("annotators")
@@ -2772,14 +2843,13 @@ def export_csv(
             w = csv.DictWriter(buf, fieldnames=headers)
             w.writeheader()
             yield buf.getvalue()
-            buf.seek(0)
-            buf.truncate(0)
+            buf.seek(0); buf.truncate(0)
 
-            # Aggregation structure:
-            # (doc_id, code) -> metrics
+            if code_filter == "__NO_MATCH__":
+                return
+
             agg: dict[tuple[str, str], dict] = {}
 
-            # Pull annotations for docs in chunks
             stmt = select(
                 HypothesisAnnotation.document_id,
                 HypothesisAnnotation.tags,
@@ -2789,16 +2859,15 @@ def export_csv(
                 HypothesisAnnotation.updated,
             ).where(HypothesisAnnotation.document_id.in_(doc_ids))
 
-            # stream rows from DB
-            for doc_id, tags, text, exact, user, updated in db.execute(stmt).yield_per(5000):
+            for doc_id, tags, text, exact, user_, updated in db.execute(stmt).yield_per(5000):
                 if not doc_id:
                     continue
 
-                resolved = resolve_codes_for_tags_cached(tags or [], canon_version, alias_to_canon, key_to_canon)
+                tag_list = _normalize_tags(tags)
+                resolved = resolve_codes_for_tags_cached(tag_list, canon_version, alias_to_canon, key_to_canon)
                 if not resolved:
                     continue
 
-                # normalize the value
                 val = (text or "").strip()
                 upd = parse_dt_utc(updated)
 
@@ -2817,44 +2886,33 @@ def export_csv(
                             "has_span": False,
                             "span_examples": [],
                             "values_set": set(),
-                            "latest_value": None,      # str
-                            "latest_updated": None,    # datetime
+                            "latest_value": None,
+                            "latest_updated": None,
                             "annotators": set(),
                         }
                         agg[key] = rec
 
                     rec["n_annotations"] += 1
+                    if user_:
+                        rec["annotators"].add(user_)
 
-                    if user:
-                        rec["annotators"].add(user)
-
-                    # span?
                     if exact and str(exact).strip():
                         rec["has_span"] = True
-                        # keep up to 3 unique examples
                         ex = str(exact).strip()
                         if ex and ex not in rec["span_examples"] and len(rec["span_examples"]) < 3:
                             rec["span_examples"].append(ex)
 
-                    # values aggregation
                     if val:
                         rec["values_set"].add(val)
-                        # pick latest non-empty by updated timestamp
-                        if upd:
-                            if rec["latest_updated"] is None or upd > rec["latest_updated"]:
-                                rec["latest_updated"] = upd
-                                rec["latest_value"] = val
-                        else:
-                            # if no updated, keep first non-empty as fallback
-                            if rec["latest_value"] is None:
-                                rec["latest_value"] = val
+                        if upd and (rec["latest_updated"] is None or upd > rec["latest_updated"]):
+                            rec["latest_updated"] = upd
+                            rec["latest_value"] = val
+                        elif rec["latest_value"] is None:
+                            rec["latest_value"] = val
 
-            # Emit rows (sorted for stability)
             for (doc_id, canonical_code) in sorted(agg.keys()):
                 rec = agg[(doc_id, canonical_code)]
                 values_list = sorted(list(rec["values_set"]))
-                values_json = json.dumps(values_list, ensure_ascii=False)
-
                 row = {
                     "project_id": str(project_id),
                     "document_id": doc_id,
@@ -2864,7 +2922,7 @@ def export_csv(
                     "source": "human",
                     "value": rec["latest_value"] or "",
                     "value_mode": "latest_nonempty_text",
-                    "values": values_json,
+                    "values": json.dumps(values_list, ensure_ascii=False),
                     "n_values": len(values_list),
                     "has_span": bool(rec["has_span"]),
                     "span_examples": " || ".join(rec["span_examples"]) if rec["span_examples"] else "",
@@ -2873,140 +2931,198 @@ def export_csv(
                 }
                 if include_annotators:
                     row["annotators"] = ";".join(sorted(rec["annotators"])) if rec["annotators"] else ""
-
                 w.writerow(row)
                 yield buf.getvalue()
-                buf.seek(0)
-                buf.truncate(0)
+                buf.seek(0); buf.truncate(0)
 
         filename = f"export_project_{project_id}.csv"
-        return StreamingResponse(
-            gen(),
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
+        return StreamingResponse(gen(), media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     finally:
         db.close()
 
 
-
-#
-#
-#
-# docker compose build api && docker compose up -d --force-recreate api
-# curl -L -o wide.csv "http://localhost:8000/export/csv_wide?project_id=5749b0e5-a0dd-4266-8a93-a4dd4114ee57"
-# head -n 3 wide.csv
-
+# @app.get("/export/csv_wide")
+# def export_csv_wide(
+#     project_id: UUID,
+#     document_id: Optional[str] = None,
+#     document_ids: Optional[str] = None,  # comma-separated
+#     code: Optional[str] = None,          # filter to one code (alias/variant ok)
+#     version: str = "all",                # v1|ext|all
+#     metric: str = "value",               # value|count|binary
+# ):
+#     if version not in {"v1", "ext", "all"}:
+#         raise HTTPException(400, "version must be v1|ext|all")
+#     if metric not in {"value", "count", "binary"}:
+#         raise HTTPException(400, "metric must be value|count|binary")
+# 
+#     db = SessionLocal()
+#     try:
+#         doc_ids = iter_project_document_ids(db, str(project_id), document_id=document_id, document_ids=document_ids)
+#         doc_ids = list(doc_ids) if doc_ids else []
+#         if not doc_ids:
+#             raise HTTPException(404, "No documents matched (check project membership and document_id(s))")
+# 
+#         doc_rows = db.execute(
+#             select(Document.document_id, Document.canonical_url).where(Document.document_id.in_(doc_ids))
+#         ).all()
+#         doc_url = {d: u for (d, u) in doc_rows}
+# 
+#         canon_version, alias_to_canon, key_to_canon = load_code_maps(db)
+# 
+#         code_filter: Optional[str] = None
+#         if code:
+#             cf = resolve_tag_to_canonical(code, canon_version, alias_to_canon, key_to_canon)
+#             code_filter = cf or "__NO_MATCH__"
+# 
+#         per_doc, codes_seen = build_wide_aggregates(
+#             db,
+#             doc_ids,
+#             canon_version,
+#             alias_to_canon,
+#             key_to_canon,
+#             version=version,
+#             code_filter=(None if code_filter is None else code_filter),
+#         )
+# 
+#         if code_filter == "__NO_MATCH__":
+#             codes_seen = set()
+# 
+#         code_cols = sorted([csv_safe_col(c) for c in codes_seen])
+#         base_cols = ["project_id", "document_id", "canonical_url"]
+#         headers = base_cols + code_cols
+# 
+#         def gen():
+#             buf = io.StringIO()
+#             w = csv.DictWriter(buf, fieldnames=headers)
+#             w.writeheader()
+#             yield buf.getvalue()
+#             buf.seek(0)
+#             buf.truncate(0)
+# 
+#             codes_sorted = sorted(list(codes_seen))
+# 
+#             for doc_id in sorted(doc_ids):
+#                 row = {
+#                     "project_id": str(project_id),
+#                     "document_id": doc_id,
+#                     "canonical_url": doc_url.get(doc_id) or "",
+#                 }
+# 
+#                 doc_bucket = per_doc.get(doc_id, {})
+# 
+#                 for canonical_code in codes_sorted:
+#                     col = csv_safe_col(canonical_code)
+#                     rec = doc_bucket.get(canonical_code)
+# 
+#                     if not rec:
+#                         row[col] = "" if metric == "value" else 0
+#                         continue
+# 
+#                     if metric == "value":
+#                         row[col] = rec["latest_value"] or ""
+#                     elif metric == "count":
+#                         row[col] = rec["count"]
+#                     else:  # binary
+#                         row[col] = 1
+# 
+#                 w.writerow(row)
+#                 yield buf.getvalue()
+#                 buf.seek(0)
+#                 buf.truncate(0)
+# 
+#         filename = f"export_wide_project_{str(project_id)}.csv"
+#         return StreamingResponse(
+#             gen(),
+#             media_type="text/csv",
+#             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+#         )
+#     finally:
+#         db.close()
 
 @app.get("/export/csv_wide")
 def export_csv_wide(
+    request: Request,
     project_id: UUID,
     document_id: Optional[str] = None,
-    document_ids: Optional[str] = None,  # comma-separated
-    code: Optional[str] = None,          # filter to one code (alias/variant ok)
-    version: str = "all",                # v1|ext|all
-    metric: str = "value",               # value|count|binary
+    document_ids: Optional[str] = None,
+    code: Optional[str] = None,
+    version: str = "all",
+    metric: str = "value",
 ):
     if version not in {"v1", "ext", "all"}:
         raise HTTPException(400, "version must be v1|ext|all")
     if metric not in {"value", "count", "binary"}:
         raise HTTPException(400, "metric must be value|count|binary")
 
+    uid = current_user_id(request)
+
     db = SessionLocal()
     try:
-        # 1) doc set (project-scoped)
-        doc_ids = iter_project_document_ids(db, str(project_id), document_id=document_id, document_ids=document_ids)
-        if not doc_ids:
-            raise HTTPException(404, "No documents matched (check project membership and document_id(s))")
+        assert_project_member(db, project_id, uid)
 
-        # 2) doc_id -> canonical_url
+        doc_ids = iter_project_document_ids(db, str(project_id), document_id=document_id, document_ids=document_ids)
+        doc_ids = list(doc_ids) if doc_ids else []
+        if not doc_ids:
+            raise HTTPException(404, "No documents matched")
+
         doc_rows = db.execute(
             select(Document.document_id, Document.canonical_url).where(Document.document_id.in_(doc_ids))
         ).all()
         doc_url = {d: u for (d, u) in doc_rows}
 
-        # 3) load code maps once
         canon_version, alias_to_canon, key_to_canon = load_code_maps(db)
 
-        # optional code filter normalized to canonical
         code_filter: Optional[str] = None
         if code:
             cf = resolve_tag_to_canonical(code, canon_version, alias_to_canon, key_to_canon)
-            if not cf:
-                # return a header-only CSV with base columns
-                cf = "__NO_MATCH__"
-            code_filter = cf
+            code_filter = cf or "__NO_MATCH__"
 
-        # 4) aggregate across annotations for these docs
         per_doc, codes_seen = build_wide_aggregates(
-            db,
-            doc_ids,
-            canon_version,
-            alias_to_canon,
-            key_to_canon,
+            db, doc_ids, canon_version, alias_to_canon, key_to_canon,
             version=version,
-            code_filter=code_filter if code_filter != "__NO_MATCH__" else "__NO_MATCH__",
+            code_filter=(None if code_filter is None else code_filter),
         )
 
-        # If user asked for an unknown code, produce empty wide body with only base headers
         if code_filter == "__NO_MATCH__":
             codes_seen = set()
 
-        # 5) build column list
         code_cols = sorted([csv_safe_col(c) for c in codes_seen])
-        base_cols = ["project_id", "document_id", "canonical_url"]
-        headers = base_cols + code_cols
+        headers = ["project_id", "document_id", "canonical_url"] + code_cols
+        codes_sorted = sorted(list(codes_seen))
 
         def gen():
             buf = io.StringIO()
             w = csv.DictWriter(buf, fieldnames=headers)
             w.writeheader()
             yield buf.getvalue()
-            buf.seek(0)
-            buf.truncate(0)
+            buf.seek(0); buf.truncate(0)
 
-            # For stable iteration:
-            codes_sorted = sorted(list(codes_seen))
-
-            for doc_id in sorted(doc_ids):
-                row = {
-                    "project_id": str(project_id),
-                    "document_id": doc_id,
-                    "canonical_url": doc_url.get(doc_id) or "",
-                }
-
-                doc_bucket = per_doc.get(doc_id, {})
+            for doc_id_ in sorted(doc_ids):
+                row = {"project_id": str(project_id), "document_id": doc_id_, "canonical_url": doc_url.get(doc_id_) or ""}
+                doc_bucket = per_doc.get(doc_id_, {})
 
                 for canonical_code in codes_sorted:
                     col = csv_safe_col(canonical_code)
                     rec = doc_bucket.get(canonical_code)
-
                     if not rec:
-                        row[col] = "" if metric == "value" else (0 if metric in {"count", "binary"} else "")
-                        continue
-
-                    if metric == "value":
+                        row[col] = "" if metric == "value" else 0
+                    elif metric == "value":
                         row[col] = rec["latest_value"] or ""
                     elif metric == "count":
                         row[col] = rec["count"]
-                    else:  # binary
+                    else:
                         row[col] = 1
 
                 w.writerow(row)
                 yield buf.getvalue()
-                buf.seek(0)
-                buf.truncate(0)
+                buf.seek(0); buf.truncate(0)
 
         filename = f"export_wide_project_{str(project_id)}.csv"
-        return StreamingResponse(
-            gen(),
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
+        return StreamingResponse(gen(), media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'})
     finally:
         db.close()
-
 
 ###############
 # Project and teams apis
@@ -3034,34 +3150,126 @@ def create_team(payload: TeamCreateRequest):
         db.close()
 
 
+# @app.post("/projects")
+# def create_project(payload: ProjectCreateRequest):
+#     db = SessionLocal()
+#     try:
+#         team = db.get(Team, payload.team_id)
+#         if not team:
+#             raise HTTPException(404, "team not found")
+#
+#         p = Project(project_id=uuid.uuid4(),
+#                     team_id=payload.team_id, name=payload.name.strip(),
+#                     description=(payload.description or "").strip() or None,)
+#         db.add(p)
+#         db.commit()
+#         return {"ok": True, "project_id": str(p.project_id), "team_id": str(p.team_id), "name": p.name, "description": p.description}
+#     finally:
+#         db.close()
+
 @app.post("/projects")
-def create_project(payload: ProjectCreateRequest):
+def create_project(payload: ProjectCreateRequest, request: Request):
+    user = get_current_user(request)
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(500, detail="Session user id missing")
+
     db = SessionLocal()
     try:
         team = db.get(Team, payload.team_id)
         if not team:
             raise HTTPException(404, "team not found")
 
-        p = Project(project_id=uuid.uuid4(), team_id=payload.team_id, name=payload.name.strip())
+        p = Project(
+            project_id=uuid.uuid4(),
+            team_id=payload.team_id,
+            name=payload.name.strip(),
+            description=(payload.description or "").strip() or None,
+        )
         db.add(p)
         db.commit()
-        return {"ok": True, "project_id": str(p.project_id), "team_id": str(p.team_id), "name": p.name}
+        db.refresh(p)
+
+        db.execute(
+            text("""
+                INSERT INTO project_members (project_id, user_id, role)
+                VALUES (:pid, :uid, 'owner')
+                ON CONFLICT (project_id, user_id) DO NOTHING
+            """),
+            {"pid": str(p.project_id), "uid": str(user_id)},
+        )
+        db.commit()
+
+        return {"ok": True, "project_id": str(p.project_id), "team_id": str(p.team_id), "name": p.name, "description": p.description}
     finally:
         db.close()
 
 
+# @app.get("/projects")
+# def list_projects(request: Request, team_id: UUID | None = None):
+#     uid = current_user_id(request)
+#
+#     db = SessionLocal()
+#     try:
+#         stmt = (
+#             select(Project)
+#             .join(text("project_members pm"), text("pm.project_id = projects.project_id"))
+#             .where(text("pm.user_id = :uid"))
+#         )
+#
+#         if team_id:
+#             stmt = stmt.where(Project.team_id == team_id)
+#
+#         projects = db.execute(stmt.params(uid=str(uid))).scalars().all()
+#
+#         return {
+#             "projects": [
+#                 {
+#                     "project_id": str(p.project_id),
+#                     "team_id": str(p.team_id),
+#                     "name": p.name,
+#                     "description": p.description,
+#                 }
+#                 for p in projects
+#             ]
+#         }
+#     finally:
+#         db.close()
+
 @app.get("/projects")
-def list_projects(team_id: UUID | None = None):
+def list_projects(request: Request, team_id: UUID | None = None):
+    user = get_current_user(request)
+    user_id = user.get("id")  # ✅ correct
+    if not user_id:
+        raise HTTPException(500, detail="Session user id missing")
+
     db = SessionLocal()
     try:
-        q = select(Project)
+        sql = """
+            SELECT p.project_id, p.team_id, p.name, p.description
+            FROM projects p
+            JOIN project_members pm ON pm.project_id = p.project_id
+            WHERE pm.user_id = :uid
+        """
+        params = {"uid": str(user_id)}
+
         if team_id:
-            q = q.where(Project.team_id == team_id)
-        projects = db.execute(q).scalars().all()
+            sql += " AND p.team_id = :tid"
+            params["tid"] = str(team_id)
+
+        sql += " ORDER BY p.name ASC"
+
+        rows = db.execute(text(sql), params).all()
+
         return {
             "projects": [
-                {"project_id": str(p.project_id), "team_id": str(p.team_id), "name": p.name}
-                for p in projects
+                {
+                    "project_id": str(r[0]),
+                    "team_id": str(r[1]),
+                    "name": r[2],
+                    "description": r[3],
+                }
+                for r in rows
             ]
         }
     finally:
@@ -3069,9 +3277,13 @@ def list_projects(team_id: UUID | None = None):
 
 
 @app.get("/projects/{project_id}")
-def get_project(project_id: UUID):
+def get_project(project_id: UUID, request: Request):
+    uid = current_user_id(request)
+
     db = SessionLocal()
     try:
+        assert_project_member(db, project_id, uid)
+
         p = db.get(Project, project_id)
         if not p:
             raise HTTPException(404, "project not found")
@@ -3098,14 +3310,20 @@ def get_project(project_id: UUID):
         db.close()
 
 
+
 @app.post("/projects/{project_id}/documents/add")
 def add_documents_to_project(
     project_id: UUID,
+    request: Request,
     payload: ProjectAddDocsRequest,
     core: str = "hitl_test",
 ):
+    uid = current_user_id(request)
+
     db = SessionLocal()
     try:
+        assert_project_member(db, project_id, uid)
+
         p = db.get(Project, project_id)
         if not p:
             raise HTTPException(404, "project not found")
@@ -3132,10 +3350,15 @@ def add_documents_to_project(
         db.close()
 
 
+
 @app.get("/projects/{project_id}/documents")
-def list_project_documents(project_id: UUID, limit: int = 50, offset: int = 0):
+def list_project_documents(project_id: UUID, request: Request, limit: int = 50, offset: int = 0):
+    uid = current_user_id(request)
+
     db = SessionLocal()
     try:
+        assert_project_member(db, project_id, uid)
+
         p = db.get(Project, project_id)
         if not p:
             raise HTTPException(404, "project not found")
@@ -3152,149 +3375,10 @@ def list_project_documents(project_id: UUID, limit: int = 50, offset: int = 0):
     finally:
         db.close()
 
+
 #################################################################
 # SEARCH and SAMOKE
 #################################################################
-
-
-from typing import Any, Dict, List, Optional, Union
-from fastapi import Query
-
-# @app.get("/search")
-# def search(
-#     # user friendly keyword (what humans type)
-#     kw: Optional[str] = None,
-#
-#     # where to search
-#     kw_field: str = "all",  # all | title | body | excerpt | values | url | id
-#
-#     # core + paging
-#     core: str = "hitl_test",
-#     rows: int = 20,
-#     start: int = 0,
-#
-#     # filters
-#     fq: Optional[List[str]] = Query(None),
-#
-#     # ✅ IMPORTANT: do NOT scope automatically unless you are 100% sure project_ids_ss is populated in Solr
-#     project_id: Optional[str] = None,
-#     scope_project: bool = False,  # default OFF to avoid "0 results"
-#
-#     # performance knobs
-#     facets: bool = False,         # default OFF (big win)
-#     include_codes_topics: bool = False,  # default OFF (you said you can drop these)
-#     include_hypothesis_links: bool = False,
-#     group_id: Optional[str] = None,
-#
-#     # allow callers to override fl (optional)
-#     fl: Optional[Union[str, List[str]]] = Query(None),
-# ):
-#     # -----------------------------
-#     # Hygiene
-#     # -----------------------------
-#     try:
-#         rows_i = max(1, min(int(rows), 200))
-#     except Exception:
-#         rows_i = 20
-#     try:
-#         start_i = max(0, int(start))
-#     except Exception:
-#         start_i = 0
-#
-#     # -----------------------------
-#     # Build Solr q using edismax (correct for title/body search)
-#     # -----------------------------
-#     q = build_user_friendly_q(kw, kw_field=kw_field, include_codes_topics=include_codes_topics)
-#
-#     # -----------------------------
-#     # Minimal fields for list view (FAST)
-#     # -----------------------------
-#     default_fl_list = [
-#         "document_id_s",
-#         "canonical_url_s",
-#         "title_txt",
-#         "published_dt",
-#         "source_s",
-#         "doc_type_s",
-#         "excerpt_txt",   # optional, remove if you want even faster
-#     ]
-#
-#     fl_norm = normalize_fl(fl)
-#     fl_out = fl_norm if fl_norm else ",".join(default_fl_list)
-#
-#     params: Dict[str, Any] = {
-#         "q": q,
-#         "rows": rows_i,
-#         "start": start_i,
-#         "wt": "json",
-#         "fl": fl_out,
-#     }
-#
-#     # -----------------------------
-#     # Filters
-#     # -----------------------------
-#     fq_list: List[str] = []
-#     if fq:
-#         for x in fq:
-#             if x:
-#                 fq_list.append(normalize_fq(x))
-#
-#     # ✅ Only apply project scoping if explicitly requested
-#     if scope_project and project_id:
-#         fq_list.append(normalize_fq(f'project_ids_ss:"{project_id}"'))
-#
-#     if fq_list:
-#         params["fq"] = fq_list
-#
-#     # -----------------------------
-#     # Facets (OFF by default)
-#     # -----------------------------
-#     if facets:
-#         params.update({
-#             "facet": "true",
-#             "facet.mincount": 1,
-#             "facet.limit": 50,
-#             "facet.field": ["doc_type_s", "source_s", "judges_ss"],
-#         })
-#
-#     data = solr_select(core, params)
-#     resp = data.get("response", {}) or {}
-#     docs = resp.get("docs", []) or []
-#
-#     out_docs = []
-#     for d in docs:
-#         doc = dict(d)
-#
-#         cu = doc.get("canonical_url_s")
-#         if isinstance(cu, list):
-#             cu = cu[0] if cu else None
-#         doc["canonical_url_s"] = cu
-#
-#         if include_hypothesis_links and cu:
-#             gid = group_id or "__world__"
-#             doc["hypothesis_incontext"] = build_hypothesis_incontext(cu, gid)
-#
-#         out_docs.append(doc)
-#
-#     return {
-#         "ok": True,
-#         "core": core,
-#         "kw": (kw or "").strip(),
-#         "kw_field": kw_field,
-#         "q": q,
-#         "fq": fq_list,
-#         "numFound": resp.get("numFound", 0),
-#         "start": start_i,
-#         "rows": rows_i,
-#         "docs": out_docs,
-#         "facets": ((data.get("facet_counts", {}) or {}).get("facet_fields", {}) or {}) if facets else {},
-#         "fl": fl_out,
-#         "facets_enabled": facets,
-#         "scope_project": scope_project,
-#     }
-
-
-
 
 from typing import Any, Dict, List, Optional, Union
 from fastapi import Query
@@ -3607,7 +3691,7 @@ def hypothesis_link(
             g = db.execute(
                 select(HypothesisGroup)
                 .where(HypothesisGroup.is_enabled == True)
-                .order_by(HypothesisGroup.is_public.asc(), HypothesisGroup.group_id.asc())
+                .order_by(HypothesisGroup.group_id.asc())
             ).scalars().first()
             gid = g.group_id if g else "__world__"
 
@@ -3685,25 +3769,21 @@ class ReviewUpdateRequest(BaseModel):
 @app.post("/projects/{project_id}/review/status")
 def set_review_status(
     project_id: UUID,
+    request: Request,
     payload: ReviewUpdateRequest,
     core: str = "hitl_test",
 ):
-    """
-    Update review status for documents in a project.
-
-    - Validates document_ids belong to the project
-    - Upserts review rows in Postgres
-    - Updates derived state in Solr
-    """
     status = payload.status.strip().lower()
     if status not in {"unseen", "in_progress", "done", "disputed"}:
         raise HTTPException(status_code=400, detail="invalid status")
 
+    uid = current_user_id(request)
+    actor = current_actor(request)
+
     db = SessionLocal()
     try:
-        # ------------------------------------------------------------------
-        # Validate document IDs belong to this project (prevents FK crashes)
-        # ------------------------------------------------------------------
+        assert_project_member(db, project_id, uid)
+
         existing = set(
             db.execute(
                 select(ProjectDocument.document_id)
@@ -3711,72 +3791,48 @@ def set_review_status(
                 .where(ProjectDocument.document_id.in_(payload.document_ids))
             ).scalars().all()
         )
-
         missing = [d for d in payload.document_ids if d not in existing]
         if missing:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "some document_ids are not in this project",
-                    "missing": missing[:20],  # cap for safety
-                },
+                detail={"error": "some document_ids are not in this project", "missing": missing[:20]},
             )
 
-        # ------------------------------------------------------------------
-        # Upsert review rows
-        # ------------------------------------------------------------------
         n = 0
         for did in payload.document_ids:
-            row = db.get(
-                ProjectDocumentReview,
-                {"project_id": project_id, "document_id": did},
-            )
+            row = db.get(ProjectDocumentReview, {"project_id": project_id, "document_id": did})
             if row:
                 row.status = status
-                row.updated_by = payload.updated_by
+                row.updated_by = actor
                 row.updated_at = datetime.utcnow()
             else:
-                db.add(
-                    ProjectDocumentReview(
-                        project_id=project_id,
-                        document_id=did,
-                        status=status,
-                        updated_by=payload.updated_by,
-                    )
-                )
+                db.add(ProjectDocumentReview(
+                    project_id=project_id,
+                    document_id=did,
+                    status=status,
+                    updated_by=actor,
+                ))
             n += 1
 
         db.commit()
 
-        # ------------------------------------------------------------------
-        # Update derived Solr state
-        # ------------------------------------------------------------------
-        solr_updates = [
-            {
-                "document_id_s": did,
-                "project_id": str(project_id),
-                "status": status,
-            }
-            for did in payload.document_ids
-        ]
+        solr_updates = [{"document_id_s": did, "project_id": str(project_id), "status": status} for did in payload.document_ids]
         solr_n = solr_update_review_status(core, solr_updates)
 
-        return {
-            "ok": True,
-            "project_id": str(project_id),
-            "status": status,
-            "rows_upserted": n,
-            "solr_docs_updated": solr_n,
-        }
-
+        return {"ok": True, "project_id": str(project_id), "status": status, "rows_upserted": n, "solr_docs_updated": solr_n}
     finally:
         db.close()
 
 
+
 @app.get("/projects/{project_id}/review/stats")
-def project_review_stats(project_id: UUID):
+def project_review_stats(project_id: UUID, request: Request):
+    uid = current_user_id(request)
+
     db = SessionLocal()
     try:
+        assert_project_member(db, project_id, uid)
+
         rows = db.execute(
             select(ProjectDocumentReview.status, func.count())
             .where(ProjectDocumentReview.project_id == project_id)
@@ -3792,25 +3848,33 @@ def project_review_stats(project_id: UUID):
         db.close()
 
 
+
 ##########################Topic Models end points
-
-
 @app.post("/topics/runs", response_model=TopicRunOut)
-def create_topic_run(payload: TopicRunCreateIn):
+def create_topic_run(payload: TopicRunCreateIn, request: Request):
+    uid = current_user_id(request)
+    actor = current_actor(request)
+
+    if not payload.project_id:
+        raise HTTPException(400, "project_id is required (no global topics)")
+
     db = SessionLocal()
     try:
+        assert_project_member(db, payload.project_id, uid)
+
         row = TopicRun(
             project_id=payload.project_id,
             name=payload.name.strip(),
-            topic_schema_version=payload.topic_schema_version.strip() or "topics-v1",
+            topic_schema_version=(payload.topic_schema_version.strip() or "topics-v1"),
             method=(payload.method or "external").strip(),
             model=(payload.model.strip() if payload.model else None),
             params=payload.params or {},
             is_active=False,
-            created_by=payload.created_by,
+            created_by=str(uid),  # store user_id
         )
         db.add(row)
         db.commit()
+        db.refresh(row)
 
         return TopicRunOut(
             run_id=str(row.run_id),
@@ -3827,78 +3891,108 @@ def create_topic_run(payload: TopicRunCreateIn):
         db.close()
 
 
+
 @app.get("/topics/runs")
-def list_topic_runs(project_id: Optional[UUID] = None):
+def list_topic_runs(request: Request, project_id: Optional[UUID] = None):
+    uid = current_user_id(request)
+
     db = SessionLocal()
     try:
-        q = select(TopicRun)
+        q = select(TopicRun).where(TopicRun.created_by == str(uid))
+
         if project_id:
+            assert_project_member(db, project_id, uid)
             q = q.where(TopicRun.project_id == project_id)
+        else:
+            # If project_id not provided, keep it safe:
+            # return only runs in projects the user is member of
+            member_project_ids = db.execute(
+                text("SELECT project_id FROM project_members WHERE user_id = :uid"),
+                {"uid": str(uid)},
+            ).all()
+            allowed = [UUID(r[0]) if not isinstance(r[0], UUID) else r[0] for r in member_project_ids]
+            if allowed:
+                q = q.where(TopicRun.project_id.in_(allowed))
+            else:
+                return {"ok": True, "runs": []}
+
         q = q.order_by(TopicRun.created_at.desc())
 
         rows = db.execute(q).scalars().all()
         out = []
         for r in rows:
-            out.append({
-                "run_id": str(r.run_id),
-                "project_id": str(r.project_id) if r.project_id else None,
-                "name": r.name,
-                "topic_schema_version": r.topic_schema_version,
-                "method": r.method,
-                "model": r.model,
-                "params": r.params or {},
-                "is_active": bool(r.is_active),
-                "created_at": iso_z(r.created_at) if getattr(r, "created_at", None) else None,
-            })
+            out.append(
+                {
+                    "run_id": str(r.run_id),
+                    "project_id": str(r.project_id) if r.project_id else None,
+                    "name": r.name,
+                    "topic_schema_version": r.topic_schema_version,
+                    "method": r.method,
+                    "model": r.model,
+                    "params": r.params or {},
+                    "is_active": bool(r.is_active),
+                    "created_at": iso_z(r.created_at) if getattr(r, "created_at", None) else None,
+                }
+            )
         return {"ok": True, "runs": out}
     finally:
         db.close()
 
 
+
 @app.post("/topics/runs/{run_id}/activate")
-def activate_topic_run(run_id: UUID, payload: TopicActivateIn):
+def activate_topic_run(run_id: UUID, payload: TopicActivateIn, request: Request):
     """
-    Marks this run active (within its scope), and optionally pushes its topics to Solr.
-    Scope rule:
-      - if run.project_id is set: deactivate other runs with same project_id
-      - else: deactivate other global runs (project_id is null)
+    USER-ONLY run activation:
+
+    - Personal runs have project_id = NULL (this is normal).
+    - Only the owner can activate.
+    - Activating a run deactivates the user's other runs (user scope only).
+    - No Solr recompute.
     """
+    uid = current_user_id(request)
+    actor = current_actor(request)
+
     db = SessionLocal()
     try:
         run = db.get(TopicRun, run_id)
         if not run:
             raise HTTPException(404, "topic run not found")
 
-        # Deactivate others in same scope
-        if run.project_id:
-            others = db.execute(
-                select(TopicRun).where(TopicRun.project_id == run.project_id).where(TopicRun.run_id != run_id)
-            ).scalars().all()
-        else:
-            others = db.execute(
-                select(TopicRun).where(TopicRun.project_id.is_(None)).where(TopicRun.run_id != run_id)
-            ).scalars().all()
+        # Enforce ownership (user-only)
+        assert_topic_run_owner(db, run_id, uid, actor)
 
+        # Deactivate other runs for SAME user (no project scoping)
+        others = (
+            db.execute(
+                select(TopicRun)
+                .where(TopicRun.created_by == str(uid))
+                .where(TopicRun.run_id != run_id)
+            )
+            .scalars()
+            .all()
+        )
         for o in others:
             o.is_active = False
+
         run.is_active = True
         db.commit()
 
+        # No Solr recompute in user-only mode
         solr_updated = 0
-        if payload.push_to_solr:
-            # recompute/push for this run
-            solr_updated = _recompute_topics_to_solr(db, core=payload.core, run_id=run_id)
 
         return {
             "ok": True,
             "run_id": str(run_id),
             "project_id": str(run.project_id) if run.project_id else None,
             "is_active": True,
-            "pushed_to_solr": bool(payload.push_to_solr),
+            "pushed_to_solr": False,
             "solr_docs_updated": solr_updated,
         }
     finally:
         db.close()
+
+
 
 
 @app.post("/topics/ingest")
@@ -4015,44 +4109,54 @@ def ingest_topics(payload: TopicsIngestIn, core: str = "hitl_test"):
 
 
 
+# def _recompute_topics_to_solr(db, *, core: str, run_id: UUID, project_id: Optional[UUID] = None) -> int:
+#     run = db.get(TopicRun, run_id)
+#     if not run:
+#         raise HTTPException(404, "topic run not found")
+#
+#     # doc scope: if project_id specified, intersect with project documents
+#     doc_scope: Optional[set[str]] = None
+#     if project_id:
+#         doc_scope = set(
+#             db.execute(select(ProjectDocument.document_id).where(ProjectDocument.project_id == project_id)).scalars().all()
+#         )
+#
+#     stmt = select(
+#         DocumentTopic.document_id,
+#         DocumentTopic.topic_key,
+#         DocumentTopic.topic_label,
+#         DocumentTopic.score,
+#     ).where(DocumentTopic.run_id == run_id)
+#
+#     doc_to_topics: Dict[str, List[Dict[str, Any]]] = {}
+#     scanned = 0
+#
+#     for did, tkey, tlab, score in db.execute(stmt).yield_per(5000):
+#         scanned += 1
+#         if not did:
+#             continue
+#         if doc_scope is not None and did not in doc_scope:
+#             continue
+#         bucket = doc_to_topics.setdefault(str(did), [])
+#         bucket.append({"topic_key": tkey, "topic_label": tlab, "score": score})
+#
+#     schema_v = run.topic_schema_version
+#     return solr_update_topics_for_docs(
+#         core=core,
+#         doc_to_topics=doc_to_topics,
+#         run_id=str(run_id),
+#         schema_version=schema_v,
+#     )
 def _recompute_topics_to_solr(db, *, core: str, run_id: UUID, project_id: Optional[UUID] = None) -> int:
-    run = db.get(TopicRun, run_id)
-    if not run:
-        raise HTTPException(404, "topic run not found")
+    """
+    USER-SCOPED TOPICS (PRIVATE)
 
-    # doc scope: if project_id specified, intersect with project documents
-    doc_scope: Optional[set[str]] = None
-    if project_id:
-        doc_scope = set(
-            db.execute(select(ProjectDocument.document_id).where(ProjectDocument.project_id == project_id)).scalars().all()
-        )
+    Recompute-to-Solr is disabled for the same reason as _push_topics_for_docs:
+    Solr is shared and would make private topics appear global.
 
-    stmt = select(
-        DocumentTopic.document_id,
-        DocumentTopic.topic_key,
-        DocumentTopic.topic_label,
-        DocumentTopic.score,
-    ).where(DocumentTopic.run_id == run_id)
-
-    doc_to_topics: Dict[str, List[Dict[str, Any]]] = {}
-    scanned = 0
-
-    for did, tkey, tlab, score in db.execute(stmt).yield_per(5000):
-        scanned += 1
-        if not did:
-            continue
-        if doc_scope is not None and did not in doc_scope:
-            continue
-        bucket = doc_to_topics.setdefault(str(did), [])
-        bucket.append({"topic_key": tkey, "topic_label": tlab, "score": score})
-
-    schema_v = run.topic_schema_version
-    return solr_update_topics_for_docs(
-        core=core,
-        doc_to_topics=doc_to_topics,
-        run_id=str(run_id),
-        schema_version=schema_v,
-    )
+    We keep this function for API compatibility but it is a no-op.
+    """
+    return 0
 
 
 @app.post("/solr/recompute_topics")
@@ -4177,49 +4281,6 @@ def _l2_normalize(v: np.ndarray) -> np.ndarray:
         return v
     return v / n
 
-# def _topic_centroid_from_humans(db, run_id: UUID, topic_key: str) -> Optional[np.ndarray]:
-#     """
-#     returns L2-normalized centroid vector or None if not enough data
-#     """
-#     # 1) get human-labeled docs for this topic
-#     human_docs = db.execute(
-#         select(DocumentTopic.document_id)
-#         .where(DocumentTopic.run_id == run_id)
-#         .where(DocumentTopic.topic_key == topic_key)
-#         .where(DocumentTopic.assignment_type == "human")
-#         .where(DocumentTopic.status == "active")
-#     ).scalars().all()
-#
-#     if not human_docs:
-#         return None
-#
-#     # 2) fetch embeddings
-#     rows = db.execute(
-#         select(DocEmbedding.embedding_dim, DocEmbedding.embedding)
-#         .where(DocEmbedding.document_id.in_(human_docs))
-#         .where(DocEmbedding.model == EMBEDDING_MODEL)
-#     ).all()
-#
-#     if not rows:
-#         return None
-#
-#     dim = rows[0][0]
-#     vecs = []
-#     for d, b in rows:
-#         if d != dim:
-#             continue
-#         vecs.append(_bytes_to_vec(b, dim))
-#
-#     if not vecs:
-#         return None
-#
-#     if len(vecs) < MIN_HUMAN_LABELS_FOR_PROP:
-#         return None
-#
-#     centroid = np.mean(np.stack(vecs, axis=0), axis=0).astype(np.float32)
-#     centroid = _l2_normalize(centroid)
-#     return centroid
-
 def _topic_centroid_from_humans(db, run_id: UUID, topic_key: str) -> Optional[np.ndarray]:
     """
     Returns L2-normalized centroid vector or None.
@@ -4274,96 +4335,6 @@ def _is_hard_blocked(decisions: list[tuple[str, str]]) -> bool:
     return any(st in HARD_BLOCK_STATUSES for (_atype, st) in (decisions or []))
 
 
-# E3) Propagation: compute centroid → FAISS → upsert auto labels → update Solr
-# def _propagate_topic(db, *, core: str, run_id: UUID, topic_key: str, topic_label: str,
-#                      k: int = 200, min_score: float = 0.35) -> Dict[str, Any]:
-#     """
-#     1) centroid from human labels
-#     2) FAISS search
-#     3) upsert auto labels (active) excluding: human active, any rejected/deleted rows
-#     4) push to Solr for affected docs
-#     """
-#     centroid = _topic_centroid_from_humans(db, run_id, topic_key)
-#     if centroid is None:
-#         return {"ok": True, "propagated": 0, "reason": "no centroid (no human labels or missing embeddings)"}
-#
-#     hits = search_centroid(centroid, k=k)
-#
-#     # Exclusions: any existing decision rows for this (doc, topic) where status != active? (rejected/deleted)
-#     existing_rows = db.execute(
-#         select(DocumentTopic.document_id, DocumentTopic.assignment_type, DocumentTopic.status)
-#         .where(DocumentTopic.run_id == run_id)
-#         .where(DocumentTopic.topic_key == topic_key)
-#     ).all()
-#
-#     existing = {}  # doc_id -> list[(type,status)]
-#     for did, atype, st in existing_rows:
-#         existing.setdefault(did, []).append((atype, st))
-#
-#     to_upsert: List[Tuple[str, float]] = []
-#     for did, score in hits:
-#         if score < min_score:
-#             continue
-#
-#         decisions = existing.get(did, [])
-#
-#         # If human active exists => leave it
-#         if any(t == "human" and s == "active" for (t, s) in decisions):
-#             continue
-#
-#         # If user rejected/deleted previously => do not re-add automatically
-#         if _is_hard_blocked(decisions):
-#             continue
-#
-#         to_upsert.append((did, score))
-#
-#     # Upsert auto labels
-#     up = 0
-#     for did, score in to_upsert:
-#         row = db.execute(
-#             select(DocumentTopic)
-#             .where(DocumentTopic.run_id == run_id)
-#             .where(DocumentTopic.document_id == did)
-#             .where(DocumentTopic.topic_key == topic_key)
-#             .where(DocumentTopic.assignment_type == "auto")
-#         ).scalars().first()
-#
-#         if row:
-#             row.topic_label = topic_label
-#             row.score = score
-#             row.status = "active"
-#             row.reason = "faiss_centroid"
-#         else:
-#             db.add(DocumentTopic(
-#                 run_id=run_id,
-#                 document_id=did,
-#                 topic_key=topic_key,
-#                 topic_label=topic_label,
-#                 score=score,
-#                 source="auto",
-#                 evidence={
-#                     "method": "faiss_centroid",
-#                     "embedding_model": EMBEDDING_MODEL,
-#                     "score": float(score),
-#                     "min_score": float(min_score),
-#                     "k": int(k),
-#                     "topic_key": topic_key
-#                 },
-#                 assignment_type="auto",
-#                 status="active",
-#                 reason="propagation"
-#             ))
-#         up += 1
-#
-#     db.commit()
-#
-#     # Push to Solr for these docs (union topics per doc should be rebuilt)
-#     # Simplest approach: recompute topics for these docs only.
-#     # We'll do a per-doc rebuild (human + auto active) and atomic update.
-#     affected_doc_ids = [did for did, _ in to_upsert]
-#     solr_updated = _push_topics_for_docs(db, core=core, run_id=run_id, document_ids=affected_doc_ids)
-#
-#     return {"ok": True, "propagated": up, "solr_docs_updated": solr_updated}
 
 def _propagate_topic(
     db,
@@ -4495,58 +4466,71 @@ def _propagate_topic(
 # E4) Push topics for a set of docs (human+auto active)
 # This avoids stale topic values without doing a full run recompute.
 
+# def _push_topics_for_docs(db, *, core: str, run_id: UUID, document_ids: List[str]) -> int:
+#     if not document_ids:
+#         return 0
+#
+#     rows = db.execute(
+#         select(
+#             DocumentTopic.document_id,
+#             DocumentTopic.topic_key,
+#             DocumentTopic.topic_label,
+#             DocumentTopic.score,
+#             DocumentTopic.assignment_type,
+#         )
+#         .where(DocumentTopic.run_id == run_id)
+#         .where(DocumentTopic.document_id.in_(document_ids))
+#         .where(DocumentTopic.status == "active")
+#     ).all()
+#
+#     doc_to = {}
+#     for did, k, lab, sc, atype in rows:
+#         doc_to.setdefault(did, []).append({
+#             "topic_key": k,
+#             "topic_label": lab,
+#             "score": float(sc) if sc is not None else 1.0  # human gets 1.0 to avoid None issues
+#         })
+#
+#     # Important: clear docs that now have zero active topics
+#     docs_with_topics = set(doc_to.keys())
+#     docs_without = [d for d in document_ids if d not in docs_with_topics]
+#
+#     updated = solr_update_topics_for_docs(
+#         core=core,
+#         doc_to_topics=doc_to,
+#         run_id=str(run_id),
+#         schema_version=None,  # optional
+#     )
+#
+#     if docs_without:
+#         clears = []
+#         for did in docs_without:
+#             clears.append({
+#                 "document_id_s": did,
+#                 "has_topics_b": {"set": False},
+#                 "topic_run_id_s": {"set": str(run_id)},
+#                 "topics_ss": {"set": []},
+#                 "topic_keys_ss": {"set": []},
+#                 "topic_kv_ss": {"set": []},
+#             })
+#         for batch in chunked(clears, 500):
+#             solr_atomic_update(core, batch, commit_within_ms=5000)
+#             updated += len(batch)
+#
+#     return updated
 def _push_topics_for_docs(db, *, core: str, run_id: UUID, document_ids: List[str]) -> int:
-    if not document_ids:
-        return 0
+    """
+    USER-SCOPED TOPICS (PRIVATE)
 
-    rows = db.execute(
-        select(
-            DocumentTopic.document_id,
-            DocumentTopic.topic_key,
-            DocumentTopic.topic_label,
-            DocumentTopic.score,
-            DocumentTopic.assignment_type,
-        )
-        .where(DocumentTopic.run_id == run_id)
-        .where(DocumentTopic.document_id.in_(document_ids))
-        .where(DocumentTopic.status == "active")
-    ).all()
+    We intentionally DO NOT write user topics into Solr, because Solr is shared ("global")
+    and would leak topics across users.
 
-    doc_to = {}
-    for did, k, lab, sc, atype in rows:
-        doc_to.setdefault(did, []).append({
-            "topic_key": k,
-            "topic_label": lab,
-            "score": float(sc) if sc is not None else 1.0  # human gets 1.0 to avoid None issues
-        })
+    Search UI is DB-enriched (DocumentTopic) and shows topics only for the current user's run.
+    Therefore pushing/clearing Solr topic fields is disabled.
 
-    # Important: clear docs that now have zero active topics
-    docs_with_topics = set(doc_to.keys())
-    docs_without = [d for d in document_ids if d not in docs_with_topics]
-
-    updated = solr_update_topics_for_docs(
-        core=core,
-        doc_to_topics=doc_to,
-        run_id=str(run_id),
-        schema_version=None,  # optional
-    )
-
-    if docs_without:
-        clears = []
-        for did in docs_without:
-            clears.append({
-                "document_id_s": did,
-                "has_topics_b": {"set": False},
-                "topic_run_id_s": {"set": str(run_id)},
-                "topics_ss": {"set": []},
-                "topic_keys_ss": {"set": []},
-                "topic_kv_ss": {"set": []},
-            })
-        for batch in chunked(clears, 500):
-            solr_atomic_update(core, batch, commit_within_ms=5000)
-            updated += len(batch)
-
-    return updated
+    Return 0 to indicate no Solr updates were performed.
+    """
+    return 0
 
 
 def _topic_key_from_label(label: str) -> str:
@@ -4572,44 +4556,64 @@ def _topic_key_from_label(label: str) -> str:
 # G) The actual user endpoints
 # G1) Human assign → propagate → update Solr
 
-from uuid import UUID
-from sqlalchemy import select
 
 @app.post("/topics/label")
-def topic_human_label(payload: TopicHumanLabelIn, core: str = SOLR_GLOBAL_CORE, k: int = 200, min_score: float = 0.35):
+def topic_human_label(
+    payload: TopicHumanLabelIn,
+    request: Request,
+    core: str = SOLR_GLOBAL_CORE,
+    k: int = 200,
+    min_score: float = 0.35,
+):
+    """
+    USER-ONLY topics:
+
+    - No project membership requirement.
+    - No Solr updates.
+    - No global propagation.
+    - All writes are scoped to the user's TopicRun (created_by=user_id).
+    """
+    uid = current_user_id(request)
+    actor = current_actor(request)
+
     db = SessionLocal()
     try:
+        # Document must exist
         doc = db.get(Document, payload.document_id)
         if not doc:
             raise HTTPException(400, f"document_id not found: {payload.document_id}")
 
-        actor = (payload.user or "unknown").strip() or "unknown"
+        topic_label = (payload.topic_label or "").strip()
+        if not topic_label:
+            raise HTTPException(400, "topic_label is required")
 
-        # key
-        if not payload.topic_key:
-            payload.topic_key = _topic_key_from_label(payload.topic_label)
+        topic_key = (payload.topic_key or "").strip()
+        if not topic_key:
+            topic_key = _topic_key_from_label(topic_label)
 
-        # run_id (auto-create on first label)
+        # run_id: create personal run if missing, else enforce owner
         if not payload.run_id:
-            # choose project scope if you have it; otherwise None = global
-            project_uuid = None  # TODO: set if you support project-scoped runs
-            run = _get_or_create_active_topic_run(db, project_id=project_uuid, user=actor)
-            payload.run_id = run.run_id  # keep as UUID
+            run = _get_or_create_active_topic_run(db, user_id=uid)  # this must be USER-ONLY resolver
+            run_id = run.run_id
         else:
-            # normalize to UUID if payload.run_id came as str
-            payload.run_id = UUID(str(payload.run_id))
+            run_id = UUID(str(payload.run_id))
+            assert_topic_run_owner(db, run_id, uid, actor)
 
-        # Upsert human active
-        row = db.execute(
-            select(DocumentTopic)
-            .where(DocumentTopic.run_id == payload.run_id)
-            .where(DocumentTopic.document_id == payload.document_id)
-            .where(DocumentTopic.topic_key == payload.topic_key)
-            .where(DocumentTopic.assignment_type == "human")
-        ).scalars().first()
+        # Upsert human label (active)
+        row = (
+            db.execute(
+                select(DocumentTopic)
+                .where(DocumentTopic.run_id == run_id)
+                .where(DocumentTopic.document_id == payload.document_id)
+                .where(DocumentTopic.topic_key == topic_key)
+                .where(DocumentTopic.assignment_type == "human")
+            )
+            .scalars()
+            .first()
+        )
 
         if row:
-            row.topic_label = payload.topic_label
+            row.topic_label = topic_label
             row.score = None
             row.assignment_type = "human"
             row.status = "active"
@@ -4618,38 +4622,36 @@ def topic_human_label(payload: TopicHumanLabelIn, core: str = SOLR_GLOBAL_CORE, 
             row.source = "human"
             row.evidence = {"action": "label", "user": actor}
         else:
-            db.add(DocumentTopic(
-                run_id=payload.run_id,
-                document_id=payload.document_id,
-                topic_key=payload.topic_key,
-                topic_label=payload.topic_label,
-                score=None,
-                assignment_type="human",
-                status="active",
-                created_by=actor,
-                updated_by=actor,
-                reason="human_label",
-                source="human",
-                evidence={"action": "label", "user": actor},
-            ))
+            db.add(
+                DocumentTopic(
+                    run_id=run_id,
+                    document_id=payload.document_id,
+                    topic_key=topic_key,
+                    topic_label=topic_label,
+                    score=None,
+                    assignment_type="human",
+                    status="active",
+                    created_by=actor,
+                    updated_by=actor,
+                    reason="human_label",
+                    source="human",
+                    evidence={"action": "label", "user": actor},
+                )
+            )
 
         db.commit()
 
-        solr_self = _push_topics_for_docs(db, core=core, run_id=payload.run_id, document_ids=[payload.document_id])
+        # No Solr updates in user-only mode
+        solr_self = 0
 
-        try:
-            propagation = _propagate_topic(
-                db, core=core, run_id=payload.run_id,
-                topic_key=payload.topic_key, topic_label=payload.topic_label,
-                k=k, min_score=min_score
-            )
-        except Exception as e:
-            propagation = {"ok": False, "propagated": 0, "solr_docs_updated": 0, "updated_doc_ids": [], "reason": str(e)}
+        # No propagation in user-only mode (can be reintroduced later as "propagate within my account")
+        propagation = {"ok": True, "propagated": 0, "solr_docs_updated": 0, "updated_doc_ids": [], "reason": "disabled"}
 
         return {
             "ok": True,
-            "topic_key": payload.topic_key,
-            "topic_label": payload.topic_label,
+            "run_id": str(run_id),
+            "topic_key": topic_key,
+            "topic_label": topic_label,
             "human_labeled": True,
             "solr_self_updated": solr_self,
             "propagation": propagation,
@@ -4660,60 +4662,74 @@ def topic_human_label(payload: TopicHumanLabelIn, core: str = SOLR_GLOBAL_CORE, 
 
 
 
-# G2) Human delete → propagate → update Solr
+
+
+# G2) Human delete (USER-ONLY, no propagation, no Solr)
 @app.delete("/topics/label")
-def topic_human_delete(payload: TopicHumanDeleteIn, core: str = SOLR_GLOBAL_CORE,
-                       k: int = 200, min_score: float = 0.35):
+def topic_human_delete(
+    payload: TopicHumanDeleteIn,
+    request: Request,
+    core: str = SOLR_GLOBAL_CORE,
+    k: int = 200,
+    min_score: float = 0.35,
+):
+    """
+    USER-ONLY topics:
+
+    - No project membership requirement.
+    - Only the run owner can delete.
+    - No propagation.
+    - No Solr updates.
+    """
+    uid = current_user_id(request)
+    actor = current_actor(request)
+
     db = SessionLocal()
     try:
-        row = db.execute(
-            select(DocumentTopic)
-            .where(DocumentTopic.run_id == payload.run_id)
-            .where(DocumentTopic.document_id == payload.document_id)
-            .where(DocumentTopic.topic_key == payload.topic_key)
-            .where(DocumentTopic.assignment_type == "human")
-        ).scalars().first()
+        run_id = UUID(str(payload.run_id))
+        assert_topic_run_owner(db, run_id, uid, actor)
+
+        row = (
+            db.execute(
+                select(DocumentTopic)
+                .where(DocumentTopic.run_id == run_id)
+                .where(DocumentTopic.document_id == payload.document_id)
+                .where(DocumentTopic.topic_key == payload.topic_key)
+                .where(DocumentTopic.assignment_type == "human")
+            )
+            .scalars()
+            .first()
+        )
 
         if not row:
             return {"ok": True, "human_deleted": False, "reason": "no human label existed"}
 
-        # Mark as human-deleted (soft delete, preserves audit and blocks auto resurrect)
-        row.assignment_type = "human"
         row.status = "deleted"
-        row.updated_by = payload.user
+        row.updated_by = actor
         row.reason = "human_deleted"
         row.source = "human"
-        row.evidence = {"action": "delete", "user": payload.user}
+        row.evidence = {"action": "delete", "user": actor}
         db.commit()
 
-        # Repropagate topic (centroid changed)
-        prop = _propagate_topic(
-            db,
-            core=core,
-            run_id=payload.run_id,
-            topic_key=payload.topic_key,
-            topic_label=row.topic_label,
-            k=k,
-            min_score=min_score,
-        )
-
-        # Update Solr for the deleted doc, plus any docs changed by re-propagation
-        to_push = {payload.document_id}
-        if isinstance(prop, dict):
-            for key in ("updated_doc_ids", "doc_ids", "docs", "updated"):
-                v = prop.get(key)
-                if isinstance(v, list):
-                    to_push.update([x for x in v if isinstance(x, str) and x])
-
-        _push_topics_for_docs(db, core=core, run_id=payload.run_id, document_ids=list(to_push))
-
-        return {"ok": True, "human_deleted": True, "propagation": prop, "solr_docs_updated": len(to_push)}
+        return {
+            "ok": True,
+            "human_deleted": True,
+            "run_id": str(run_id),
+            "document_id": payload.document_id,
+            "topic_key": payload.topic_key,
+            "propagation": {"ok": True, "propagated": 0, "reason": "disabled"},
+            "solr_docs_updated": 0,
+        }
     finally:
         db.close()
 
+
+
 @app.post("/topics/label/delete")
-def topics_label_delete_alias(payload: TopicHumanDeleteIn):
-    return topic_human_delete(payload)
+def topics_label_delete_alias(payload: TopicHumanDeleteIn, request: Request):
+    # Keep alias for UI compatibility
+    return topic_human_delete(payload, request=request)
+
 
 
 # G3) Suggestions-only endpoint (for UI preview)
@@ -4750,144 +4766,67 @@ def topic_suggestions(run_id: UUID, topic_key: str, k: int = 200, min_score: flo
 
 
         
-# def get_or_create_active_global_run(db, *, actor: str | None = None) -> TopicRun:
-#     # 1) try find active
-#     run = db.execute(
-#         select(TopicRun)
-#         .where(TopicRun.project_id.is_(None), TopicRun.is_active.is_(True))
-#         .limit(1)
-#     ).scalar_one_or_none()
-#     if run:
-#         return run
-#
-#     # 2) if none active, pick latest existing global run
-#     latest = db.execute(
-#         select(TopicRun)
-#         .where(TopicRun.project_id.is_(None))
-#         .order_by(TopicRun.created_at.desc())
-#         .limit(1)
-#     ).scalar_one_or_none()
-#
-#     # ensure only one active
-#     db.execute(
-#         update(TopicRun)
-#         .where(TopicRun.project_id.is_(None))
-#         .values(is_active=False)
-#     )
-#
-#     if latest:
-#         latest.is_active = True
-#         db.add(latest)
-#         db.commit()
-#         db.refresh(latest)
-#         return latest
-#
-#     # 3) none exist => create new active global run
-#     run = TopicRun(
-#         project_id=None,
-#         name="topics_global_v1",
-#         topic_schema_version="topics-v1",
-#         method="human+propagation",
-#         is_active=True,
-#         created_by=actor,
-#         params={},
-#     )
-#     db.add(run)
-#     db.commit()
-#     db.refresh(run)
-#     return run
-
-# def get_or_create_active_global_run(db, actor: str | None = None) -> TopicRun:
-#     run = db.execute(
-#         select(TopicRun)
-#         .where(TopicRun.project_id.is_(None), TopicRun.is_active.is_(True))
-#         .limit(1)
-#     ).scalar_one_or_none()
-#
-#     if run:
-#         return run
-#
-#     # deactivate any stale "active" (paranoia)
-#     db.execute(
-#         update(TopicRun)
-#         .where(TopicRun.project_id.is_(None))
-#         .values(is_active=False)
-#     )
-#
-#     run = TopicRun(
-#         project_id=None,
-#         name="Global Topics Run",
-#         topic_schema_version="topics-v1",
-#         method="human+propagation",
-#         is_active=True,          # ✅ important
-#         created_by=actor,
-#         params={},
-#     )
-#     db.add(run)
-#     db.commit()
-#     db.refresh(run)
-#     return run
-#
-#             return {
-#                 "ok": True,
-#                 "propagated": 0,
-#                 "reason": f"no centroid (need >= {MIN_HUMAN_LABELS_FOR_PROP} active human labels with embeddings)"
-#             }
-#
-#         hits = search_centroid(centroid, k=k)
-#         out = [{"document_id": did, "score": sc} for did, sc in hits if sc >= min_score]
-#         return {"ok": True, "topic_key": topic_key, "topic_label": any_label, "suggestions": out}
-#     finally:
-#         db.close()
-
 class TopicRejectIn(BaseModel):
     run_id: UUID
     document_id: str
     topic_key: str
-    user: Optional[str] = None
-
 
 @app.post("/topics/reject")
-def topic_reject(payload: TopicRejectIn, core: str = "hitl_test"):
+def topic_reject(payload: TopicRejectIn, request: Request, core: str = "hitl_test"):
+    """
+    USER-ONLY topics:
+
+    - No project membership requirement.
+    - Only the run owner can reject.
+    - Reject affects only the user's run (DocumentTopic row status).
+    - No Solr updates.
+    """
+    uid = current_user_id(request)
+    actor = current_actor(request)
+
     db = SessionLocal()
     try:
-        row = db.execute(
-            select(DocumentTopic)
-            .where(DocumentTopic.run_id == payload.run_id)
-            .where(DocumentTopic.document_id == payload.document_id)
-            .where(DocumentTopic.topic_key == payload.topic_key)
-        ).scalars().first()
+        assert_topic_run_owner(db, payload.run_id, uid, actor)
+
+        row = (
+            db.execute(
+                select(DocumentTopic)
+                .where(DocumentTopic.run_id == payload.run_id)
+                .where(DocumentTopic.document_id == payload.document_id)
+                .where(DocumentTopic.topic_key == payload.topic_key)
+            )
+            .scalars()
+            .first()
+        )
 
         if row:
-            # if human active exists, do NOT allow reject to wipe it
             if row.assignment_type == "human" and row.status == "active":
                 raise HTTPException(400, "Cannot reject an active human label. Delete it instead.")
             row.assignment_type = "auto"
             row.status = "rejected"
-            row.updated_by = payload.user
+            row.updated_by = actor
             row.reason = "user_rejected"
             row.source = "human"
-            row.evidence = {"action": "reject", "user": payload.user}
+            row.evidence = {"action": "reject", "user": actor}
         else:
-            # create a tombstone so propagation won't re-add it
-            db.add(DocumentTopic(
-                run_id=payload.run_id,
-                document_id=payload.document_id,
-                topic_key=payload.topic_key,
-                topic_label="(rejected)",
-                score=None,
-                source="human",
-                evidence={"action": "reject", "user": payload.user},
-                assignment_type="auto",
-                status="rejected",
-                reason="user_rejected",
-                created_by=payload.user,
-            ))
+            db.add(
+                DocumentTopic(
+                    run_id=payload.run_id,
+                    document_id=payload.document_id,
+                    topic_key=payload.topic_key,
+                    topic_label="(rejected)",
+                    score=None,
+                    source="human",
+                    evidence={"action": "reject", "user": actor},
+                    assignment_type="auto",
+                    status="rejected",
+                    reason="user_rejected",
+                    created_by=actor,
+                    updated_by=actor,
+                )
+            )
 
         db.commit()
-
-        # Push Solr rebuild for this doc so the topic disappears immediately
-        _push_topics_for_docs(db, core=core, run_id=payload.run_id, document_ids=[payload.document_id])
 
         return {"ok": True, "rejected": True}
     finally:
@@ -4895,45 +4834,140 @@ def topic_reject(payload: TopicRejectIn, core: str = "hitl_test"):
 
 
 
-import uuid
-from uuid import UUID
-from sqlalchemy import select
 
-def _get_or_create_active_topic_run(db, *, project_id: UUID | None, user: str | None) -> TopicRun:
-    # prefer project-scoped active run
-    if project_id is not None:
-        r = db.execute(
+def _get_or_create_active_topic_run(
+    db,
+    *,
+    user_id: str,
+) -> TopicRun:
+    """
+    USER-ONLY topic run resolver (robust).
+
+    Rules:
+      - Active run is unique per (created_by=user_id)
+      - NO project scoping; project_id is always NULL
+      - If multiple active exist (legacy), keep the newest and deactivate the rest
+      - If none exists: create one, mark it active
+    """
+    uid = (str(user_id or "")).strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    actives = (
+        db.execute(
             select(TopicRun)
-            .where(TopicRun.project_id == project_id)
-            .where(TopicRun.is_active == True)
-        ).scalars().first()
-        if r:
-            return r
+            .where(TopicRun.created_by == uid)
+            .where(TopicRun.is_active.is_(True))
+            .order_by(TopicRun.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )
 
-    # fallback: global active run
-    r = db.execute(
-        select(TopicRun)
-        .where(TopicRun.project_id.is_(None))
-        .where(TopicRun.is_active == True)
-    ).scalars().first()
-    if r:
-        return r
+    if actives:
+        # ensure only the newest remains active
+        keep = actives[0]
+        changed = False
+        for r in actives[1:]:
+            if r.is_active:
+                r.is_active = False
+                changed = True
+        if changed:
+            db.commit()
+        return keep
 
-    # create lazily
+    # No active run -> create one
     new_run = TopicRun(
-        run_id=uuid.uuid4(),            # (optional if model default works, but explicit is safe)
-        project_id=project_id,
-        name="auto",
+        project_id=None,  # personal run
+        name="personal",
         topic_schema_version="topics-v1",
         method="external",
         model=None,
         params={},
         is_active=True,
-        created_by=user,
+        created_by=uid,
     )
     db.add(new_run)
     db.commit()
     db.refresh(new_run)
     return new_run
+
+
+
+
+
+
+############## Scoping projects and topic modeartion to user only and not global.
+
+def get_current_user(request: Request) -> dict:
+    """
+    Reads the logged-in user from the session.
+    Supports either:
+      - request.session["user"] = {"id": "...", ...}
+      - request.session["user"] = {"user_id": "...", ...}  (legacy)
+    """
+    u = request.session.get("user")
+    if not u:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Normalize: ensure both keys exist (id + user_id) for compatibility
+    if "id" in u and "user_id" not in u:
+        u["user_id"] = u["id"]
+    if "user_id" in u and "id" not in u:
+        u["id"] = u["user_id"]
+
+    return u
+
+
+def current_user_id(request: Request) -> str:
+    u = get_current_user(request)
+    uid = (u.get("id") or "").strip()   # ✅ auth router stores "id"
+    if not uid:
+        raise HTTPException(status_code=500, detail="Session user.id missing")
+    return uid
+
+def current_actor(request: Request) -> str:
+    u = get_current_user(request)
+    actor = (u.get("username") or u.get("email") or u.get("id") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=500, detail="Session actor missing")
+    return actor
+
+def assert_project_member(db, project_id: UUID, user_id: str):
+    row = db.execute(
+        text("""
+            SELECT 1
+            FROM project_members
+            WHERE project_id = :pid AND user_id = :uid
+            LIMIT 1
+        """),
+        {"pid": str(project_id), "uid": str(user_id)},
+    ).first()
+    if not row:
+        raise HTTPException(status_code=403, detail="Not a member of this project")
+
+def assert_topic_run_owner(db, run_id: UUID, user_id: str, actor: str | None = None):
+    run = db.get(TopicRun, run_id)
+    if not run:
+        raise HTTPException(404, "topic run not found")
+
+    uid = (str(user_id or "")).strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    owner = (str(run.created_by or "")).strip()
+    if not owner:
+        raise HTTPException(status_code=403, detail="Topic run has no owner (created_by is empty)")
+
+    act = (str(actor or "")).strip()
+
+    # Allow:
+    #  - exact user_id match (correct modern behavior)
+    #  - legacy match against actor string (older rows saved username/email)
+    if owner != uid and (not act or owner != act):
+        raise HTTPException(status_code=403, detail="Only topic-run creator can modify topics")
+
+    return run
+
 
 

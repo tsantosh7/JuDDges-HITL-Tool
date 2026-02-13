@@ -1,11 +1,320 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Add Codes</h1>
+<h1>Coding Scheme (Codes)</h1>
 
-<div class="row">
+{# -------------------------------------------------------------------------
+  Coding scheme reference: code -> metadata shown to users (description + examples + possible values)
+  NOTE: Keep keys aligned with your canonical code keys (normalize in backend as you already do).
+--------------------------------------------------------------------------- #}
+{% set SCHEME = {
+  "ConvCourtName": {
+    "label": "Court Name(s) where Offender Convicted/Pled Guilty",
+    "ptype": "list of string",
+    "pdesc": "Name(s) of the court where the defendant was convicted or pleaded guilty.",
+    "possible": "Free-text court names. List all if more than one court (e.g., Crown Court, Magistrates’ Court, Youth Court).",
+    "examples": ["[\"Crown Court at Southwark\", \"Magistrates Court of Liverpool\", \"Central Criminal Court\"]"]
+  },
+  "ConvictPleaDate": {
+    "label": "Conviction/Guilty Plea Date(s)",
+    "ptype": "list of string",
+    "pdesc": "Date(s) on which the defendant was convicted or pleaded guilty.",
+    "possible": "Acceptable as written dates (e.g., “21st May 2002”) or ISO dates (YYYY-MM-DD). List all if multiple.",
+    "examples": ["[\"21st May 2002\", \"December 2004\", \"2003-01-22\", \"2002-05-21\", \"2004-12-01\"]"]
+  },
+  "ConvictOffence": {
+    "label": "Offence(s) Offender Convicted of",
+    "ptype": "list of string",
+    "pdesc": "Offence(s) of which the defendant was convicted.",
+    "possible": "Free-text offence labels. Include qualifiers/affixes where stated (e.g., “conspiracy to…”, “death by…”, “with intent”). List all offences.",
+    "examples": ["[\"Dangerous driving (death by)\", \"Aggravated burglary\", \"Supply of controlled drugs (including conspiracy to)\", \"Manslaughter\", \"Pervert the course of justice\", \"Intent to endanger life\"]"]
+  },
+  "AcquitOffence": {
+    "label": "Offence(s) Offender Acquitted of",
+    "ptype": "list of string",
+    "pdesc": "Offence(s) of which the defendant was acquitted.",
+    "possible": "N/A or list of acquitted offences as free-text. Use the same offence naming style as ConvictOffence.",
+    "examples": ["[\"Theft\", \"Money laundering\", \"Criminal damage\", \"Perjury\"]"]
+  },
+  "ConfessPleadGuilty": {
+    "label": "Did Offender Confess/Plead Guilty?",
+    "ptype": "list of string",
+    "pdesc": "Whether the defendant confessed or pleaded guilty (capture text evidence if present).",
+    "possible": "Yes/No OR narrative snippets (e.g., “pleaded guilty on …”, “pleaded not guilty”, “denied offence”).",
+    "examples": ["[\"pleaded guilty on 3rd April 2002\", \"pleaded not guilty\", \"No, denied offence\", \"Yes\", \"No\"]"]
+  },
+  "PleaPoint": {
+    "label": "If YES, at what point during proceedings?",
+    "ptype": "list of string",
+    "pdesc": "Stage at which the plea was entered.",
+    "possible": "Examples: in police presence / at first court appearance / before trial / first day of trial / after first day / earliest/latest opportunity / don’t know.",
+    "examples": ["[\"in police presence\", \"at first court appearance\", \"on day of trial\", \"on re-arraignment\", \"earliest opportunity\"]"]
+  },
+  "RemandDecision": {
+    "label": "Remand Decision for Offender",
+    "ptype": "list of string",
+    "pdesc": "Remand decision post-conviction / during proceedings as stated.",
+    "possible": "Unconditional Bail / Conditional Bail / Remanded into custody / Don’t know (or close phrasing as written).",
+    "examples": ["[\"remanded on unconditional bail\", \"bail with curfew\", \"Unconditional Bail\", \"Conditional Bail\", \"Remanded into custody\"]"]
+  },
+  "RemandCustodyTime": {
+    "label": "If REMANDED in CUSTODY, duration?",
+    "ptype": "list of string",
+    "pdesc": "Duration of any remand in custody.",
+    "possible": "Free-text durations (days/weeks/months/years).",
+    "examples": ["[\"38 days that he had spent on remand\", \"3 months\", \"30 days\"]"]
+  },
+  "SentCourtName": {
+    "label": "Court Name where Offender Sentenced",
+    "ptype": "list of string",
+    "pdesc": "Name(s) of the court where the defendant was sentenced.",
+    "possible": "Free-text court names. List all if more than one court was involved.",
+    "examples": ["[\"Crown Court at Canterbury\", \"Newcastle Crown Court\", \"Southend Crown Court\"]"]
+  },
+  "Sentence": {
+    "label": "Sentence(s) Received",
+    "ptype": "list of string",
+    "pdesc": "Sentence(s) imposed (list per offence where relevant).",
+    "possible": "Free-text sentences (custody, fine, community order etc.).",
+    "examples": ["[\"2 years imprisonment\", \"£500 fine\", \"5 years custody\"]"]
+  },
+  "SentServe": {
+    "label": "If more than one sentence, how are they served?",
+    "ptype": "list of string",
+    "pdesc": "How multiple sentences run.",
+    "possible": "Concurrent / Consecutive / Combination (both).",
+    "examples": ["[\"served concurrently\", \"consecutive\", \"Combination\"]"]
+  },
+  "WhatAncillary": {
+    "label": "Ancillary Orders Applied",
+    "ptype": "list of string",
+    "pdesc": "Ancillary orders applied by the court.",
+    "possible": "Select all stated (e.g., restraining order, compensation, confiscation, disqualification, etc.) or “Don’t know”.",
+    "examples": ["[\"Restraining order\", \"Compensation order\", \"Confiscation order\", \"Financial reporting order\"]"]
+  },
+  "OffSex": {
+    "label": "Offender(s) Gender",
+    "ptype": "list of string",
+    "pdesc": "Gender(s) of the defendant(s).",
+    "possible": "All Male / All Female / Male & Female (Mixed) or equivalent phrasing.",
+    "examples": ["[\"male\", \"female\", \"male and female\", \"All Male\", \"Mixed\"]"]
+  },
+  "OffAgeOffence": {
+    "label": "Offender(s) Age at Time of Offence",
+    "ptype": "list of string",
+    "pdesc": "Age of defendant at offence (as stated).",
+    "possible": "Numeric or approximate ranges (e.g., “20s or 30s”). Use “Don’t know” if absent.",
+    "examples": ["[\"21 years old\", \"age of 34\", \"28-42\", \"20s or 30s\", \"between thirty two and 35\"]"]
+  },
+  "OffJobOffence": {
+    "label": "Offender(s) Employment Status at Time of Offence",
+    "ptype": "list of string",
+    "pdesc": "Employment status at offence.",
+    "possible": "Employed / Unemployed / Student / Retired / Child / Other / Don’t know (or narrative like “self-employed gardener”).",
+    "examples": ["[\"self-employed\", \"Student\", \"unemployed\", \"Employed\", \"Unemployed\", \"junior manager\"]"]
+  },
+  "OffHomeOffence": {
+    "label": "Offender(s) Accommodation Status at Time of Offence",
+    "ptype": "list of string",
+    "pdesc": "Accommodation status at offence.",
+    "possible": "Had fixed address / Homeless / Temporary accommodation / Sectioned / Don’t know.",
+    "examples": ["[\"Fixed addresses\", \"hostel where he had been living\", \"appellant was homeless\", \"Temporary/not fixed\"]"]
+  },
+  "OffMentalOffence": {
+    "label": "Offender(s) Mental Health at Time of Offence",
+    "ptype": "list of string",
+    "pdesc": "Learning/developmental or mental-health issues noted.",
+    "possible": "Had mental health problems / Has learning difficulties / Learning/developmental / Other / Don’t know (or narrative).",
+    "examples": ["[\"Mental health problems/difficulties\", \"learning disabilities\", \"depression\", \"severe reactive depression, requiring treatment\"]"]
+  },
+  "OffIntoxOffence": {
+    "label": "Was Offender Intoxicated at Time of Offence?",
+    "ptype": "list of string",
+    "pdesc": "Intoxication status at offence.",
+    "possible": "Yes-drinking / Yes-drugs / Yes-drinking&drugs / No / Don’t know (or narrative).",
+    "examples": ["[\"drunk and violent\", \"had taken heroin\", \"drink and drugs\", \"Yes-drinking&drugs\", \"Yes-drugs\"]"]
+  },
+  "OffVicRelation": {
+    "label": "Offender–Victim Relationship",
+    "ptype": "list of string",
+    "pdesc": "Relationship defendant → victim.",
+    "possible": "Stranger / Relative / Acquaintance / Don’t know (or specific relation like spouse/ex-partner).",
+    "examples": ["[\"Stranger\", \"Spouse\", \"ex-partner\", \"Relative\", \"Acquaintance\"]"]
+  },
+  "VictimType": {
+    "label": "Victim Type",
+    "ptype": "list of string",
+    "pdesc": "Type of victim (entity).",
+    "possible": "Individual person / Company / Government / Organisation.",
+    "examples": ["[\"shop\", \"council\", \"individual person\", \"Government\"]"]
+  },
+  "VicNum": {
+    "label": "Number of Victims",
+    "ptype": "list of string",
+    "pdesc": "Number of victims or ratio (as stated).",
+    "possible": "Numeric or ratio text (e.g., “1 of 3”).",
+    "examples": ["[\"1 of 3\", \"two of 36\", \"1-3 of 4\", \"2\"]"]
+  },
+  "VicSex": {
+    "label": "Victim(s) Gender",
+    "ptype": "list of string",
+    "pdesc": "Gender(s) of victim(s).",
+    "possible": "All Male / All Female / Male & Female (Mixed) or equivalent wording.",
+    "examples": ["[\"female\", \"both male and female\", \"Mixed\", \"All Male\"]"]
+  },
+  "VicAgeOffence": {
+    "label": "Victim(s) Age at Time of Offence",
+    "ptype": "list of string",
+    "pdesc": "Age of victim(s) at offence (as stated).",
+    "possible": "Numeric or ranges.",
+    "examples": ["[\"30 years of age\", \"41 or 42\", \"40-42\", \"11-12 and 14-15\"]"]
+  },
+  "VicJobOffence": {
+    "label": "Victim(s) Employment Status at Time of Offence",
+    "ptype": "list of string",
+    "pdesc": "Employment status of victim(s).",
+    "possible": "Employed / Unemployed / Student / Retired / Child / Other / Don’t know.",
+    "examples": ["[\"unemployed\", \"Student\", \"Employed\", \"Retired\", \"self-employed\"]"]
+  },
+  "VicHomeOffence": {
+    "label": "Victim(s) Accommodation Status at Time of Offence",
+    "ptype": "list of string",
+    "pdesc": "Accommodation status of victim(s).",
+    "possible": "Had fixed address / Homeless / Temporary accommodation / Sectioned / Don’t know.",
+    "examples": ["[\"homeless\", \"Fixed Address\", \"Temporary accommodation\", \"Sectioned\"]"]
+  },
+  "VicMentalOffence": {
+    "label": "Victim(s) Mental Health at Time of Offence",
+    "ptype": "list of string",
+    "pdesc": "Learning/developmental or mental-health issues for victim(s).",
+    "possible": "Had mental health problems / Has learning difficulties / Learning/developmental / Other / Don’t know.",
+    "examples": ["[\"mental health issues and learning disability\", \"Autism\", \"Had mental health problems\", \"Other\"]"]
+  },
+  "VicIntoxOffence": {
+    "label": "Was Victim Intoxicated at Time of Offence?",
+    "ptype": "list of string",
+    "pdesc": "Victim’s intoxication status.",
+    "possible": "Yes-drinking / Yes-drugs / Yes-drinking&drugs / No / Don’t know (or narrative).",
+    "examples": ["[\"drunk\", \"cocaine use\", \"Yes-drugs\", \"Yes-drinking\", \"Yes-drinking&drugs\", \"No\"]"]
+  },
+  "ProsEvidTypeTrial": {
+    "label": "Prosecution Evidence Types at Trial",
+    "ptype": "list of string",
+    "pdesc": "Which types of evidence did the prosecution present at trial (select all that apply).",
+    "possible": "Examples: CCTV, victim testimony, identification, eyewitness, police testimony, expert evidence, DNA, digital forensics, bad character, etc.",
+    "examples": ["[\"CCTV\", \"DNA match\", \"Victim testimony\", \"Expert report/testimony\"]"]
+  },
+  "DefEvidTypeTrial": {
+    "label": "Defence Evidence Types at Trial",
+    "ptype": "list of string",
+    "pdesc": "Which types of evidence did the defence present at trial (select all that apply).",
+    "possible": "Examples: denial, alibi, challenge credibility, lack of DNA/medical evidence, lesser offence admission, cut-throat defence, etc.",
+    "examples": ["[\"Offender denies offence\", \"No DNA evidence\", \"Alibi claim\"]"]
+  },
+  "PreSentReport": {
+    "label": "Pre-sentence Report Assessment",
+    "ptype": "list of string",
+    "pdesc": "Risk level from the pre-sentence report (reoffending/harm) as stated.",
+    "possible": "Low/Medium/High risk of reoffending/harm (or narrative).",
+    "examples": ["[\"high risk of reoffending\", \"low risk of re-offending, but a medium risk of harm to the public\", \"medium risk of harm\"]"]
+  },
+  "AggFactSent": {
+    "label": "Aggravating Factors at Sentencing",
+    "ptype": "list of string",
+    "pdesc": "Aggravating factors mentioned by the court (select all that apply).",
+    "possible": "Examples: on bail, previous convictions, planning, weapon use, vulnerable victim, group offending, concealment, etc.",
+    "examples": ["[\"offence committed while on bail\", \"use of a weapon to frighten or injure victim\"]"]
+  },
+  "MitFactSent": {
+    "label": "Mitigating Factors at Sentencing",
+    "ptype": "list of string",
+    "pdesc": "Mitigating factors mentioned by the court (select all that apply).",
+    "possible": "Examples: remorse, admissions, good character, no previous convictions, mental illness, rehabilitation prospects, caring responsibilities, etc.",
+    "examples": ["[\"offender showed genuine remorse\", \"Offender has no relevant previous convictions\"]"]
+  },
+  "VicImpactStatement": {
+    "label": "Victim Impact Statement at Original Sentencing",
+    "ptype": "list of string",
+    "pdesc": "Whether a victim impact statement was given.",
+    "possible": "Yes / No / Don’t know (or explicit narrative reference).",
+    "examples": ["[\"victim impact statement\", \"No\", \"Yes\"]"]
+  },
+  "Appellant": {
+    "label": "Who is Appellant?",
+    "ptype": "list of string",
+    "pdesc": "Who brings the appeal.",
+    "possible": "Offender / Attorney General / Other (or equivalent wording).",
+    "examples": ["[\"offender\", \"solicitor general\", \"Offenders\"]"]
+  },
+  "CoDefAccNum": {
+    "label": "If co-defendants/co-accused, how many?",
+    "ptype": "list of string",
+    "pdesc": "Number of co-defendants/co-accused (excluding appellant).",
+    "possible": "Numeric as stated (or Don’t know).",
+    "examples": ["[\"1\", \"4\", \"2\"]"]
+  },
+  "AppealAgainst": {
+    "label": "Appeal Against",
+    "ptype": "list of string",
+    "pdesc": "Ground(s) for appeal (category).",
+    "possible": "Conviction unsafe / Sentence unduly excessive / Sentence unduly lenient / Both / Other (extension of time, etc.).",
+    "examples": ["[\"Conviction is unsafe\", \"Sentence is unduly lenient\", \"appeal against sentence\"]"]
+  },
+  "AppealGround": {
+    "label": "Specific Ground(s) for Appeal",
+    "ptype": "list of string",
+    "pdesc": "Specific legal grounds of appeal as stated (select all that apply).",
+    "possible": "Examples: misdirection, admissibility errors, jury prejudice, guideline category error, excessive sentence, Wednesbury unreasonableness, etc.",
+    "examples": ["[\"jury exposed to prejudicial evidence\", \"trial judge misdirected jury\", \"excessive sentence\"]"]
+  },
+  "SentGuideWhich": {
+    "label": "Sentencing Guideline/Law/Act Mentioned",
+    "ptype": "list of string",
+    "pdesc": "Sentencing guidelines or statutes cited by the appeal court.",
+    "possible": "Free-text citations (e.g., “section X of the Y Act YYYY”, “Sentencing Council Guideline on …”, “Totality principle”).",
+    "examples": ["[\"section 18 of the Offences Against the Person Act 1861\", \"section 114 of the Criminal Justice Act 2003\"]"]
+  },
+  "AppealOutcome": {
+    "label": "Outcome of Appeal",
+    "ptype": "list of string",
+    "pdesc": "Outcome of the appeal.",
+    "possible": "Dismissed/Refused/Allowed (conviction quashed / sentence reduced / increased / mixed decision / retrial ordered, etc.).",
+    "examples": ["[\"Dismissed\", \"Allowed & Conviction Quashed\", \"Appeal allowed and sentence reduced by 106 days\", \"We refuse leave\"]"]
+  },
+  "ReasonQuashConv": {
+    "label": "Reasons for Quashing Conviction (Unsafe)",
+    "ptype": "list of string",
+    "pdesc": "Appeal court basis given for why conviction is unsafe/quashed (select all that apply).",
+    "possible": "Examples: misdirection, procedural irregularity, impermissible indictment, evidential admissibility errors, etc.",
+    "examples": ["[\"procedural irregularity\", \"jury misdirection\", \"indictment charged the appellant in an impermissible manner\"]"]
+  },
+  "ReasonSentExcessNotLenient": {
+    "label": "Reasons Sentence Unduly Excessive (Not Lenient)",
+    "ptype": "list of string",
+    "pdesc": "Reasons why sentence was unduly excessive.",
+    "possible": "Examples: failure to consider mitigation, culpability/role error, seriousness overstated, disparity vs co-offenders, guideline misapplication, etc.",
+    "examples": ["[\"lack of consideration for personal mitigation\", \"excessive sentence when compared to co-offenders\", \"judge fell into error when assessing culpability\"]"]
+  },
+  "ReasonSentLenientNotExcess": {
+    "label": "Reasons Sentence Unduly Lenient (Not Excessive)",
+    "ptype": "list of string",
+    "pdesc": "Reasons why sentence was unduly lenient.",
+    "possible": "Examples: guideline not followed, wrong approach to custody thresholds, historical offence complexities, etc.",
+    "examples": ["[\"judge did not refer to relevant guideline\", \"Offence difficult to sentence as it happened in the past when offender was a child\"]"]
+  },
+  "ReasonDismiss": {
+    "label": "Reasons Appeal Dismissed/Refused",
+    "ptype": "list of string",
+    "pdesc": "Reasons for dismissal/refusal of the appeal (select all that apply).",
+    "possible": "Examples: sentence within guideline range, no merit, no prejudice, correct rulings, jury directions adequate, etc.",
+    "examples": ["[\"original sentence fell within guideline range\", \"no ground for appeal\", \"judge made correct ruling\", \"no prejudice caused to offender\"]"]
+  }
+} %}
+
+<div class="row" style="align-items:center; gap: 12px;">
   <a class="btnlink" href="/ui/codes{% if include_inactive %}{% else %}?include_inactive=1{% endif %}">
     {% if include_inactive %}Hide inactive{% else %}Show inactive{% endif %}
   </a>
+  <span class="muted">Tip: Click a code row for full guidance (possible values + examples).</span>
 </div>
 
 {% if message %}
@@ -14,15 +323,19 @@
 
 {% if user.role == "admin" %}
 <div class="card">
-  <h2>Create Extension Code</h2>
+  <h2>Create / Register a Code</h2>
+  <p class="muted" style="margin-top:-6px;">
+    Create a new tag/code key. For scheme guidance shown to users, either (a) add it to the SCHEME map in this template,
+    or (b) store guidance in the code description field (and it will display under “Stored description”).
+  </p>
   <form method="post" action="/ui/codes/create">
     <div class="row">
-      <input class="grow" name="code" placeholder="code key (will normalize)" required>
+      <input class="grow" name="code" placeholder="code key (will normalize) e.g., ConvCourtName" required>
       <input class="grow" name="display_name" placeholder="display name (optional)">
     </div>
     <div class="row">
-      <input class="grow" name="description" placeholder="description (optional)">
-      <button type="submit">Create</button>
+      <input class="grow" name="description" placeholder="description (optional — can include type/values/examples)">
+      <button type="submit" class="btnlink">Create</button>
     </div>
   </form>
 </div>
@@ -31,21 +344,66 @@
 <table class="table">
   <thead>
     <tr>
-      <th>Code</th>
-      <th>Version</th>
-      <th>Locked</th>
-      <th>Active</th>
-      <th>Aliases</th>
-      {% if user.role == "admin" %}<th>Actions</th>{% endif %}
+      <th style="width: 14%;">Code</th>
+      <th style="width: 20%;">Description</th>
+      <th>Description + Possible Values + Examples</th>
+      <th style="width: 10%;">Version</th>
+      <th style="width: 8%;">Locked</th>
+      <th style="width: 8%;">Active</th>
+      <th style="width: 16%;">Aliases</th>
+      {% if user.role == "admin" %}<th style="width: 16%;">Actions</th>{% endif %}
     </tr>
   </thead>
+
   <tbody>
   {% for c in codes %}
+    {% set meta = SCHEME.get(c.code) %}
     <tr>
-      <td><strong>{{ c.code }}</strong></td>
+      <td>
+        <div><strong>{{ c.code }}</strong></div>
+        {% if c.display_name %}
+          <div class="muted">{{ c.display_name }}</div>
+        {% endif %}
+      </td>
+
+      <td>
+        {% if meta %}
+          {{ meta.label }}
+        {% else %}
+          <span class="muted">—</span>
+        {% endif %}
+      </td>
+
+      <td>
+        <details>
+          <summary class="btnlink" style="display:inline-block; cursor:pointer;">View guidance</summary>
+          <div style="margin-top:10px;">
+            {% if meta %}
+              <div><strong>Description</strong></div>
+              <div class="muted" style="margin-bottom:10px;">{{ meta.pdesc }}</div>
+
+              <div><strong>Possible values / how to fill</strong></div>
+              <div class="muted" style="margin-bottom:10px;">{{ meta.possible }}</div>
+
+              <div><strong>Example</strong></div>
+              <div class="mono" style="white-space: pre-wrap;">{{ meta.examples[0] }}</div>
+            {% else %}
+              <div class="muted">No scheme guidance configured for this code key yet.</div>
+            {% endif %}
+
+            {% if c.description %}
+              <hr style="margin: 12px 0;">
+              <div><strong>Stored description</strong></div>
+              <div class="muted" style="white-space: pre-wrap;">{{ c.description }}</div>
+            {% endif %}
+          </div>
+        </details>
+      </td>
+
       <td><span class="pill">{{ c.version }}</span></td>
       <td>{{ "Yes" if c.is_locked else "No" }}</td>
       <td>{{ "Yes" if c.is_active else "No" }}</td>
+
       <td class="mono">
         {% if c.aliases and c.aliases|length > 0 %}
           {{ c.aliases|join(", ") }}
@@ -56,10 +414,10 @@
 
       {% if user.role == "admin" %}
       <td class="actions">
-        <form method="post" action="/ui/codes/add_alias">
+        <form method="post" action="/ui/codes/add_alias" style="margin-bottom:8px;">
           <input type="hidden" name="code" value="{{ c.code }}">
           <input name="alias" placeholder="new alias" required>
-          <button type="submit">Add alias</button>
+          <button type="submit" class="btnlink">Add alias</button>
         </form>
 
         {% if (not c.is_locked) and c.is_active %}
@@ -74,4 +432,5 @@
   {% endfor %}
   </tbody>
 </table>
+
 {% endblock %}

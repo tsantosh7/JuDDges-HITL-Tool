@@ -1,83 +1,83 @@
 # api/app/ui/routes.py
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Depends, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
-import httpx
-import urllib.parse
-from fastapi import HTTPException
-from sqlalchemy import select
-from uuid import UUID
-from app.auth.deps import require_user, require_role
-from typing import Optional
-from uuid import UUID
-from sqlalchemy import select
-from app.models import TopicRun
-from app.db import SessionLocal
-
 import logging
-logger = logging.getLogger(__name__)
+import os
+import urllib.parse
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Set, Tuple
+from uuid import UUID
 
+import httpx
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+
+from app.auth.deps import require_paid_user, require_role, require_user
 from app.db import SessionLocal
 
+from sqlalchemy import select, text, func
+from app.models import TopicRun, DocumentTopic
 
-from sqlalchemy import select
-from uuid import UUID
-from app.models import TopicRun
 
-from app.topics.service import get_or_create_active_global_run
-
-from collections import defaultdict
-from typing import Dict, List, Any, Optional, Tuple
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
-# -------------------------
-# Internal ASGI calls to your API endpoints (no network hop)
-# -------------------------
-# async def asgi_get(request: Request, path: str, params: dict | None = None):
-#     transport = httpx.ASGITransport(app=request.app)
-#     async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
-#         r = await client.get(path, params=params)
-#         r.raise_for_status()
-#         return r.json()
+
+# ============================================================
+# Internal ASGI call helpers (UI -> API) with COOKIE FORWARDING
+# ============================================================
+def _forward_cookie_headers(request: Request) -> dict:
+    """
+    Forward browser session cookies into internal ASGI calls so that
+    API endpoints protected by session auth work correctly.
+    """
+    cookie_hdr = request.headers.get("cookie")
+    headers: dict = {}
+    if cookie_hdr:
+        headers["cookie"] = cookie_hdr
+    return headers
+
+
+def _flatten_params(p: dict | None) -> list[tuple[str, str]]:
+    """
+    Turn dict params into a list of (k,v) pairs.
+    If value is list/tuple, encode as repeated params: k=a&k=b.
+    """
+    if not p:
+        return []
+    out: list[tuple[str, str]] = []
+    for k, v in p.items():
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple)):
+            for item in v:
+                if item is None:
+                    continue
+                out.append((str(k), str(item)))
+        else:
+            out.append((str(k), str(v)))
+    return out
+
 
 async def asgi_get(request: Request, path: str, params: dict | None = None):
     """
     Internal ASGI call helper (UI -> API).
 
-    Fixes / improvements:
-    - Ensures list-valued params (e.g., fq=["a","b"], facet.field=["x","y"]) are encoded
-      as repeated query parameters, not as a Python list string.
-    - Avoids surprises when passing nested types.
-    - Adds a clearer error message on failures (includes URL + status + response snippet).
+    - Forwards cookies (fixes 401 Not authenticated)
+    - Properly encodes list-valued query params
+    - Raises a helpful error including response body snippet
     """
-    import httpx
-
-    def _flatten_params(p: dict | None) -> list[tuple[str, str]]:
-        if not p:
-            return []
-        out: list[tuple[str, str]] = []
-        for k, v in p.items():
-            if v is None:
-                continue
-            if isinstance(v, (list, tuple)):
-                for item in v:
-                    if item is None:
-                        continue
-                    out.append((str(k), str(item)))
-            else:
-                out.append((str(k), str(v)))
-        return out
-
     transport = httpx.ASGITransport(app=request.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
         flat = _flatten_params(params)
-        r = await client.get(path, params=flat)
+        headers = _forward_cookie_headers(request)
+        r = await client.get(path, params=flat, headers=headers)
         try:
             r.raise_for_status()
         except httpx.HTTPStatusError as e:
-            # Surface response body (super useful for debugging)
             snippet = ""
             try:
                 snippet = (r.text or "")[:2000]
@@ -88,23 +88,22 @@ async def asgi_get(request: Request, path: str, params: dict | None = None):
                 request=e.request,
                 response=e.response,
             ) from e
-        return r.json()
 
+        # allow non-json responses if needed
+        ct = (r.headers.get("content-type") or "").lower()
+        if ct.startswith("application/json"):
+            return r.json()
+        return {"text": r.text}
 
-# async def asgi_post_json(request: Request, url: str, payload: dict):
-#     async with httpx.AsyncClient() as client:
-#         r = await client.post(url, json=payload, timeout=60)
-#
-#     if r.status_code == 422:
-#         logger.error("422 from %s payload=%s resp=%s", url, payload, r.text)
-#
-#     r.raise_for_status()
-#     return r.json() if r.content else None
 
 async def asgi_post_json(request: Request, path: str, payload: dict):
+    """
+    Internal ASGI POST helper that forwards cookies.
+    """
     transport = httpx.ASGITransport(app=request.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
-        r = await client.post(path, json=payload, timeout=60)
+        headers = _forward_cookie_headers(request)
+        r = await client.post(path, json=payload, timeout=60, headers=headers)
 
     if r.status_code == 422:
         logger.error("422 from %s payload=%s resp=%s", path, payload, r.text)
@@ -112,16 +111,24 @@ async def asgi_post_json(request: Request, path: str, payload: dict):
     r.raise_for_status()
     return r.json() if r.content else None
 
+
 async def asgi_patch(request: Request, path: str):
+    """
+    Internal ASGI PATCH helper that forwards cookies.
+    """
     transport = httpx.ASGITransport(app=request.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
-        r = await client.patch(path)
+        headers = _forward_cookie_headers(request)
+        r = await client.patch(path, headers=headers)
         r.raise_for_status()
-        if r.headers.get("content-type", "").startswith("application/json"):
+        if (r.headers.get("content-type") or "").startswith("application/json"):
             return r.json()
         return {"ok": True}
 
 
+# ============================================================
+# Hypothesis helpers (kept if you still use them elsewhere)
+# ============================================================
 def build_hypothesis_incontext(url: str, group_id: str = "__world__") -> str:
     return (
         "https://hyp.is/go?url="
@@ -140,9 +147,9 @@ def build_hypothesis_direct(url: str, group_id: str = "__world__") -> str:
     )
 
 
-# -------------------------
+# ============================================================
 # Session helpers
-# -------------------------
+# ============================================================
 def _get_project_id(request: Request) -> str | None:
     return request.session.get("project_id")
 
@@ -187,9 +194,9 @@ async def _pick_run_id_for_project(request: Request, project_id: str) -> str | N
     return chosen.get("run_id")
 
 
-# -------------------------
-# Friendly keyword -> Solr query builder
-# -------------------------
+# ============================================================
+# Solr query helpers
+# ============================================================
 def _solr_escape_phrase(s: str) -> str:
     """Safe for Solr phrase queries: field:"...". Escapes backslash + quotes."""
     s = (s or "").strip()
@@ -210,22 +217,71 @@ def _solr_escape_query(s: str) -> str:
     return s
 
 
+# def build_user_friendly_q(kw: str | None, kw_field: str, include_codes_topics: bool) -> str:
+#     """
+#     User-friendly search:
+#       - title/excerpt/body full text
+#       - human/model extracted values (raw + normalized)
+#     Optional:
+#       - codes_all_ss, topics_ss, topic_keys_ss, topic_kv_ss
+#     """
+#     kw = (kw or "").strip()
+#     if not kw:
+#         return "*:*"
+#
+#     if kw_field == "url":
+#         return f'canonical_url_s:"{_solr_escape_phrase(kw)}"'
+#     if kw_field == "id":
+#         return f'document_id_s:"{_solr_escape_phrase(kw)}"'
+#
+#     qtext = _solr_escape_query(kw)
+#
+#     qf_all = (
+#         "title_txt^4 "
+#         "excerpt_txt^2 "
+#         "body_txt "
+#         "values_human_txt "
+#         "values_model_txt "
+#         "values_human_norm_txt "
+#         "values_model_norm_txt"
+#     )
+#     qf_title = "title_txt^4"
+#     qf_excerpt = "excerpt_txt^2"
+#     qf_body = "body_txt"
+#     qf_values = "values_human_txt values_model_txt values_human_norm_txt values_model_norm_txt"
+#
+#     if kw_field == "title":
+#         qf = qf_title
+#     elif kw_field == "excerpt":
+#         qf = qf_excerpt
+#     elif kw_field == "body":
+#         qf = qf_body
+#     elif kw_field == "values":
+#         qf = qf_values
+#     else:
+#         qf = qf_all
+#
+#     base = f'{{!edismax qf="{qf}" pf="{qf_title}" mm=1}}{qtext}'
+#
+#     if include_codes_topics:
+#         p = _solr_escape_phrase(kw)
+#         extra = (
+#             f' OR codes_all_ss:"{p}"'
+#             f' OR topics_ss:"{p}"'
+#             f' OR topic_keys_ss:"{p}"'
+#             f' OR topic_kv_ss:"{p}"'
+#         )
+#         return f"({base}{extra})"
+#
+#     return base
+
 def build_user_friendly_q(kw: str | None, kw_field: str, include_codes_topics: bool) -> str:
     """
-    User-friendly search:
-      - title/excerpt/body full text
-      - human/model extracted values (raw + normalized)
-    Optional:
-      - codes_all_ss, topics_ss, topic_keys_ss, topic_kv_ss
+    User-friendly search over Solr text + extracted values.
 
-    kw_field:
-      all      -> broad search
-      title    -> title only
-      excerpt  -> excerpt only
-      body     -> body only
-      values   -> values_* only
-      url      -> canonical_url_s exact
-      id       -> document_id_s exact
+    IMPORTANT:
+      - topics are USER-SCOPED (Postgres), so we DO NOT query Solr topic fields here.
+      - we keep codes_all_ss optional OR because codes are still Solr-side.
     """
     kw = (kw or "").strip()
     if not kw:
@@ -238,7 +294,6 @@ def build_user_friendly_q(kw: str | None, kw_field: str, include_codes_topics: b
 
     qtext = _solr_escape_query(kw)
 
-    # Text fields (edismax qf)
     qf_all = (
         "title_txt^4 "
         "excerpt_txt^2 "
@@ -266,36 +321,86 @@ def build_user_friendly_q(kw: str | None, kw_field: str, include_codes_topics: b
 
     base = f'{{!edismax qf="{qf}" pf="{qf_title}" mm=1}}{qtext}'
 
+    # ✅ Keep codes OR (optional), but DO NOT include Solr topics fields
     if include_codes_topics:
         p = _solr_escape_phrase(kw)
-        extra = (
-            f' OR codes_all_ss:"{p}"'
-            f' OR topics_ss:"{p}"'
-            f' OR topic_keys_ss:"{p}"'
-            f' OR topic_kv_ss:"{p}"'
-        )
+        extra = f' OR codes_all_ss:"{p}"'
         return f"({base}{extra})"
 
     return base
 
-
-# -------------------------
+# ============================================================
 # Root -> Dashboard
-# -------------------------
+# ============================================================
 @router.get("/", response_class=HTMLResponse)
 def ui_root(request: Request):
     return RedirectResponse("/ui/dashboard", status_code=303)
 
 
-# -------------------------
+# ============================================================
 # Dashboard
-# -------------------------
+# ============================================================
 @router.get("/dashboard", response_class=HTMLResponse)
 async def ui_dashboard(request: Request, user=Depends(require_user)):
+    # ✅ This now works because asgi_get forwards cookies
     projects_res = await asgi_get(request, "/projects", params={})
     projects = projects_res.get("projects", []) or []
+
     selected_project_id = _get_project_id(request)
     selected_project_name = _get_project_name(request)
+
+    if not selected_project_id and len(projects) == 1:
+        only = projects[0]
+        _set_project_id(request, only.get("project_id"))
+        _set_project_name(request, only.get("name"))
+        selected_project_id = only.get("project_id")
+        selected_project_name = only.get("name")
+
+    msg = request.query_params.get("msg")
+
+    # Compute access state (same logic as require_paid_user, but non-blocking)
+    role = (user.get("role") or "").lower()
+    plan = (user.get("plan") or "free").lower()
+    access_until = user.get("access_until")
+
+    access_ok = True
+    access_reason = None
+
+    if role != "admin":
+        if plan == "free":
+            access_ok = False
+            access_reason = "Your account is on the free plan. Redeem a code or upgrade to continue."
+        elif access_until:
+            dt = None
+            try:
+                dt = datetime.fromisoformat(access_until)
+            except Exception:
+                dt = None
+            if dt and dt <= datetime.now(timezone.utc):
+                access_ok = False
+                access_reason = "Your access has expired. Redeem a code or upgrade to continue."
+
+    # Collaboration list
+    db = SessionLocal()
+    try:
+        collabs = db.execute(
+            text(
+                """
+                SELECT
+                  u.username,
+                  u.email,
+                  p.name AS project_name,
+                  p.description AS project_description
+                FROM project_members pm
+                JOIN users u ON u.id = pm.user_id
+                JOIN projects p ON p.project_id = pm.project_id
+                ORDER BY p.name, u.username
+                """
+            )
+        ).mappings().all()
+        collabs = [dict(r) for r in collabs]
+    finally:
+        db.close()
 
     return request.app.state.templates.TemplateResponse(
         "dashboard.html",
@@ -306,6 +411,10 @@ async def ui_dashboard(request: Request, user=Depends(require_user)):
             "has_projects": bool(projects),
             "selected_project_id": selected_project_id,
             "selected_project_name": selected_project_name,
+            "message": msg,
+            "collabs": collabs,
+            "access_ok": access_ok,
+            "access_reason": access_reason,
         },
     )
 
@@ -314,7 +423,7 @@ async def ui_dashboard(request: Request, user=Depends(require_user)):
 async def ui_select_project(
     request: Request,
     project_id: str = Form(...),
-    user=Depends(require_user),
+    user=Depends(require_paid_user),
 ):
     proj = await asgi_get(request, f"/projects/{project_id}", params={})
     _set_project_id(request, project_id)
@@ -323,16 +432,16 @@ async def ui_select_project(
     return RedirectResponse("/ui/dashboard", status_code=303)
 
 
-
-#### Documentation ########
+# ============================================================
+# Documentation / About
+# ============================================================
 @router.get("/documentation", response_class=HTMLResponse)
-async def ui_documentation(request: Request, user=Depends(require_user)):
+async def ui_documentation(request: Request, user=Depends(require_paid_user)):
     return request.app.state.templates.TemplateResponse(
         "documentation.html",
         {
             "request": request,
             "user": user,
-            # optional: for navbar highlighting
             "active_nav": "documentation",
             "selected_project_id": _get_project_id(request),
             "selected_project_name": _get_project_name(request),
@@ -340,160 +449,24 @@ async def ui_documentation(request: Request, user=Depends(require_user)):
     )
 
 
-
-# # -------------------------
-# # Search Documents
-# # -------------------------
-@router.get("/search", response_class=HTMLResponse)
-async def ui_search(
-    request: Request,
-    q: str = "",
-    kw: str | None = None,
-    kw_field: str = "all",
-    include_codes_topics: str | None = "1",
-    start: int = 0,
-    scope: str = "all",
-    code: str | None = None,
-    topic: str | None = None,
-
-    # UI values:
-    #   ""   -> Any
-    #   "1"  -> Yes
-    #   "0"  -> No
-    has_human: str | None = None,
-    has_any_span: str | None = None,
-
-    user=Depends(require_user),
-):
-    import os
-    import urllib.parse
-
-    # core (query -> session -> env -> default)
-    core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
-    if not core:
-        core = "hitl_test"
-    request.session["core"] = core
-
-    project_id = _get_project_id(request)
-    project_name = _get_project_name(request)
-
-    # enforce 20 rows per page
-    rows = 20
-    try:
-        start_i = int(start)
-    except Exception:
-        start_i = 0
-    if start_i < 0:
-        start_i = 0
-
-    def _as_bool_choice(v: str | None) -> str | None:
-        """
-        Normalize UI dropdown values to:
-          - "true" / "false" / None
-        Accepts common forms: 1/0, true/false, yes/no
-        """
-        if v is None:
-            return None
-        s = str(v).strip().lower()
-        if s in ("", "any", "all"):
-            return None
-        if s in ("1", "true", "yes", "y"):
-            return "true"
-        if s in ("0", "false", "no", "n"):
-            return "false"
-        return None  # unknown -> treat as Any
-
-    fq: list[str] = []
-
-    if code:
-        fq.append(f'codes_all_ss:"{_solr_escape_phrase(code)}"')
-    if topic:
-        fq.append(f'topics_ss:"{_solr_escape_phrase(topic)}"')
-
-    # Human coding filter (Any/Yes/No)
-    human_choice = _as_bool_choice(has_human)
-    if human_choice == "true":
-        fq.append("has_human_b:true")
-    elif human_choice == "false":
-        fq.append("has_human_b:false")
-
-    # Has comments (Any/Yes/No) -> has_any_span_b
-    span_choice = _as_bool_choice(has_any_span)
-    if span_choice == "true":
-        fq.append("has_any_span_b:true")
-    elif span_choice == "false":
-        fq.append("has_any_span_b:false")
-
-    advanced_q = (q or "").strip()
-    kw_clean = (kw or "").strip()
-
-    if advanced_q:
-        effective_q = advanced_q
-    else:
-        effective_q = build_user_friendly_q(
-            kw_clean,
-            kw_field,
-            include_codes_topics=(include_codes_topics == "1" or include_codes_topics is None),
-        )
-
-    # minimal fields for list view
-    fl = ",".join([
-        "document_id_s",
-        "title_txt",
-        "published_dt",
-        "canonical_url_s",
-        "has_human_b",
-        "has_any_span_b",
-    ])
-
-    params = {
-        "q": effective_q,
-        "core": core,
-        "rows": rows,
-        "start": start_i,
-        "fq": fq,
-        "fl": fl,
-        # NOTE: this only helps if your FastAPI /search endpoint implements include_facets
-        "include_facets": "1",
-    }
-
-    if scope == "project":
-        if not project_id:
-            return RedirectResponse("/ui/dashboard", status_code=303)
-        params["project_id"] = project_id
-
-    result = await asgi_get(request, "/search", params=params)
-    facets = result.get("facets", {}) or {}
-
-    # current URL for back button in doc_detail (urlencoded)
-    back_url_enc = urllib.parse.quote(str(request.url), safe="")
-
+# ✅ Make About visible on all pages by using require_user (not require_paid_user)
+@router.get("/about", response_class=HTMLResponse)
+async def ui_about(request: Request, user=Depends(require_user)):
     return request.app.state.templates.TemplateResponse(
-        "search.html",
+        "about.html",
         {
             "request": request,
             "user": user,
-            "core": core,
-            "project_id": project_id,
-            "project_name": project_name,
-            "scope": scope,
-            "q": advanced_q,
-            "kw": kw_clean,
-            "kw_field": kw_field,
-            "include_codes_topics": include_codes_topics or "1",
-            "start": start_i,
-            "code": code,
-            "topic": topic,
-            # keep values for dropdown selection
-            "has_human": has_human,
-            "has_any_span": has_any_span,
-            "result": result,
-            "facets": facets,
-            "back_url_enc": back_url_enc,
+            "active_nav": "about",
+            "selected_project_id": request.session.get("project_id"),
+            "selected_project_name": request.session.get("project_name"),
         },
     )
 
 
+# ============================================================
+# Search Documents
+# ============================================================
 # @router.get("/search", response_class=HTMLResponse)
 # async def ui_search(
 #     request: Request,
@@ -507,12 +480,8 @@ async def ui_search(
 #     topic: str | None = None,
 #     has_human: str | None = None,
 #     has_any_span: str | None = None,
-#     user=Depends(require_user),
+#     user=Depends(require_paid_user),
 # ):
-#     import os
-#     import urllib.parse
-#
-#     # core (query -> session -> env -> default)
 #     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
 #     if not core:
 #         core = "hitl_test"
@@ -521,7 +490,6 @@ async def ui_search(
 #     project_id = _get_project_id(request)
 #     project_name = _get_project_name(request)
 #
-#     # enforce 20 rows per page (as requested)
 #     rows = 20
 #     try:
 #         start_i = int(start)
@@ -530,15 +498,36 @@ async def ui_search(
 #     if start_i < 0:
 #         start_i = 0
 #
+#     def _as_bool_choice(v: str | None) -> str | None:
+#         if v is None:
+#             return None
+#         s = str(v).strip().lower()
+#         if s in ("", "any", "all"):
+#             return None
+#         if s in ("1", "true", "yes", "y"):
+#             return "true"
+#         if s in ("0", "false", "no", "n"):
+#             return "false"
+#         return None
+#
 #     fq: list[str] = []
+#
 #     if code:
 #         fq.append(f'codes_all_ss:"{_solr_escape_phrase(code)}"')
 #     if topic:
 #         fq.append(f'topics_ss:"{_solr_escape_phrase(topic)}"')
-#     if has_human == "1":
+#
+#     human_choice = _as_bool_choice(has_human)
+#     if human_choice == "true":
 #         fq.append("has_human_b:true")
-#     if has_any_span == "1":
+#     elif human_choice == "false":
+#         fq.append("has_human_b:false")
+#
+#     span_choice = _as_bool_choice(has_any_span)
+#     if span_choice == "true":
 #         fq.append("has_any_span_b:true")
+#     elif span_choice == "false":
+#         fq.append("has_any_span_b:false")
 #
 #     advanced_q = (q or "").strip()
 #     kw_clean = (kw or "").strip()
@@ -552,15 +541,16 @@ async def ui_search(
 #             include_codes_topics=(include_codes_topics == "1" or include_codes_topics is None),
 #         )
 #
-#     # ✅ minimal fields for list view (faster)
-#     fl = ",".join([
-#         "document_id_s",
-#         "title_txt",
-#         "published_dt",
-#         "canonical_url_s",
-#         "has_human_b",
-#         "has_any_span_b",
-#     ])
+#     fl = ",".join(
+#         [
+#             "document_id_s",
+#             "title_txt",
+#             "published_dt",
+#             "canonical_url_s",
+#             "has_human_b",
+#             "has_any_span_b",
+#         ]
+#     )
 #
 #     params = {
 #         "q": effective_q,
@@ -569,7 +559,7 @@ async def ui_search(
 #         "start": start_i,
 #         "fq": fq,
 #         "fl": fl,
-#         "include_facets": "1",  # UI needs facets for dropdowns
+#         "include_facets": "1",
 #     }
 #
 #     if scope == "project":
@@ -580,7 +570,6 @@ async def ui_search(
 #     result = await asgi_get(request, "/search", params=params)
 #     facets = result.get("facets", {}) or {}
 #
-#     # current URL for back button in doc_detail (urlencoded)
 #     back_url_enc = urllib.parse.quote(str(request.url), safe="")
 #
 #     return request.app.state.templates.TemplateResponse(
@@ -607,15 +596,278 @@ async def ui_search(
 #         },
 #     )
 
+@router.get("/search", response_class=HTMLResponse)
+async def ui_search(
+    request: Request,
+    q: str = "",
+    kw: str | None = None,
+    kw_field: str = "all",
+    include_codes_topics: str | None = "1",
+    start: int = 0,
+    scope: str = "all",
+    code: str | None = None,
+    topic: str | None = None,
+    has_human: str | None = None,
+    has_any_span: str | None = None,
+    user=Depends(require_paid_user),
+):
+    import os
+    import urllib.parse
+    from uuid import UUID
+    from sqlalchemy import select, func
 
-# -------------------------
-# Add to Project (bulk + from search)
-# -------------------------
+    core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
+    if not core:
+        core = "hitl_test"
+    request.session["core"] = core
+
+    project_id = _get_project_id(request)
+    project_name = _get_project_name(request)
+
+    rows = 20
+    try:
+        start_i = int(start)
+    except Exception:
+        start_i = 0
+    if start_i < 0:
+        start_i = 0
+
+    def _as_bool_choice(v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        if s in ("", "any", "all"):
+            return None
+        if s in ("1", "true", "yes", "y"):
+            return "true"
+        if s in ("0", "false", "no", "n"):
+            return "false"
+        return None
+
+    # If user requests project scope but no project is selected -> bounce
+    if scope == "project" and not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    fq: list[str] = []
+
+    # ✅ Code filter stays Solr-side
+    if code:
+        fq.append(f'codes_all_ss:"{_solr_escape_phrase(code)}"')
+
+    # ❌ DO NOT filter by Solr topics fields (global)
+    human_choice = _as_bool_choice(has_human)
+    if human_choice == "true":
+        fq.append("has_human_b:true")
+    elif human_choice == "false":
+        fq.append("has_human_b:false")
+
+    span_choice = _as_bool_choice(has_any_span)
+    if span_choice == "true":
+        fq.append("has_any_span_b:true")
+    elif span_choice == "false":
+        fq.append("has_any_span_b:false")
+
+    advanced_q = (q or "").strip()
+    kw_clean = (kw or "").strip()
+
+    if advanced_q:
+        effective_q = advanced_q
+    else:
+        # IMPORTANT: build_user_friendly_q() must NOT include Solr topic fields (yours is correct)
+        effective_q = build_user_friendly_q(
+            kw_clean,
+            kw_field,
+            include_codes_topics=(include_codes_topics == "1" or include_codes_topics is None),
+        )
+
+    # ✅ Minimal Solr fields; topics are shown from Postgres, not Solr
+    fl = ",".join(
+        [
+            "document_id_s",
+            "title_txt",
+            "published_dt",
+            "canonical_url_s",
+            "has_human_b",
+            "has_any_span_b",
+        ]
+    )
+
+    # ---------------- USER-ONLY RUN RESOLUTION ----------------
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    if not uid:
+        raise HTTPException(401, "Not authenticated")
+
+    run_id = _get_run_id(request)
+    if not run_id:
+        db = SessionLocal()
+        try:
+            # USER-ONLY active run: project_id is ignored
+            r = (
+                db.execute(
+                    select(TopicRun)
+                    .where(TopicRun.created_by == str(uid))
+                    .where(TopicRun.is_active.is_(True))
+                    .order_by(TopicRun.created_at.desc())
+                )
+                .scalars()
+                .first()
+            )
+            run_id = str(r.run_id) if r else None
+        finally:
+            db.close()
+
+        _set_run_id(request, run_id)
+
+    # ✅ Topic filter (user-specific): use Postgres DocumentTopic -> restrict Solr by doc_id list
+    if (topic or "").strip() and run_id:
+        topic_val = (topic or "").strip()
+        db = SessionLocal()
+        try:
+            doc_ids = (
+                db.execute(
+                    select(DocumentTopic.document_id)
+                    .where(DocumentTopic.run_id == UUID(run_id))
+                    .where(DocumentTopic.status == "active")
+                    .where((DocumentTopic.topic_label == topic_val) | (DocumentTopic.topic_key == topic_val))
+                )
+                .scalars()
+                .all()
+            )
+        finally:
+            db.close()
+
+        doc_ids = [d for d in doc_ids if d]
+        if not doc_ids:
+            result = {"ok": True, "docs": [], "numFound": 0, "start": start_i, "facets": {}}
+            return request.app.state.templates.TemplateResponse(
+                "search.html",
+                {
+                    "request": request,
+                    "user": user,
+                    "core": core,
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "scope": scope,
+                    "q": advanced_q,
+                    "kw": kw_clean,
+                    "kw_field": kw_field,
+                    "include_codes_topics": include_codes_topics or "1",
+                    "start": start_i,
+                    "code": code,
+                    "topic": topic,
+                    "has_human": has_human,
+                    "has_any_span": has_any_span,
+                    "result": result,
+                    "facets": {},
+                    "back_url_enc": urllib.parse.quote(str(request.url), safe=""),
+                    "user_topics_facet": [],
+                    "run_id": run_id,
+                },
+            )
+
+        CHUNK = 200
+        id_fqs = []
+        for i in range(0, len(doc_ids), CHUNK):
+            chunk = doc_ids[i : i + CHUNK]
+            inner = " ".join([f'"{_solr_escape_phrase(x)}"' for x in chunk])
+            id_fqs.append(f"document_id_s:({inner})")
+        fq.append("(" + " OR ".join(id_fqs) + ")")
+
+    params = {
+        "q": effective_q,
+        "core": core,
+        "rows": rows,
+        "start": start_i,
+        "fq": fq,
+        "fl": fl,
+        "include_facets": "1",
+    }
+
+    if scope == "project":
+        params["project_id"] = project_id
+
+    result = await asgi_get(request, "/search", params=params)
+
+    docs = result.get("docs", []) or []
+    doc_ids_on_page = [d.get("document_id_s") for d in docs if isinstance(d, dict) and d.get("document_id_s")]
+
+    # ✅ Enrich docs with USER topics from Postgres (no global topics)
+    topics_map: dict[str, list[str]] = {}
+    user_topics_facet: list[dict] = []
+
+    if run_id and doc_ids_on_page:
+        db = SessionLocal()
+        try:
+            rows2 = db.execute(
+                select(DocumentTopic.document_id, DocumentTopic.topic_label)
+                .where(DocumentTopic.run_id == UUID(run_id))
+                .where(DocumentTopic.status == "active")
+                .where(DocumentTopic.document_id.in_(doc_ids_on_page))
+            ).all()
+
+            for did, lab in rows2:
+                if did and lab:
+                    topics_map.setdefault(str(did), []).append(str(lab))
+
+            facet_rows = db.execute(
+                select(DocumentTopic.topic_label, func.count())
+                .where(DocumentTopic.run_id == UUID(run_id))
+                .where(DocumentTopic.status == "active")
+                .where(DocumentTopic.document_id.in_(doc_ids_on_page))
+                .group_by(DocumentTopic.topic_label)
+                .order_by(func.count().desc(), DocumentTopic.topic_label.asc())
+                .limit(50)
+            ).all()
+
+            user_topics_facet = [{"value": lab, "count": int(cnt)} for lab, cnt in facet_rows if lab]
+        finally:
+            db.close()
+
+    for d in docs:
+        did = d.get("document_id_s") if isinstance(d, dict) else None
+        if did:
+            d["user_topics_ss"] = topics_map.get(did, [])
+
+    result["docs"] = docs
+    facets = result.get("facets", {}) or {}
+    back_url_enc = urllib.parse.quote(str(request.url), safe="")
+
+    return request.app.state.templates.TemplateResponse(
+        "search.html",
+        {
+            "request": request,
+            "user": user,
+            "core": core,
+            "project_id": project_id,
+            "project_name": project_name,
+            "scope": scope,
+            "q": advanced_q,
+            "kw": kw_clean,
+            "kw_field": kw_field,
+            "include_codes_topics": include_codes_topics or "1",
+            "start": start_i,
+            "code": code,
+            "topic": topic,
+            "has_human": has_human,
+            "has_any_span": has_any_span,
+            "result": result,
+            "facets": facets,
+            "back_url_enc": back_url_enc,
+            "user_topics_facet": user_topics_facet,
+            "run_id": run_id,
+        },
+    )
+
+
+
+# ============================================================
+# Add to Project
+# ============================================================
 @router.get("/add_to_project", response_class=HTMLResponse)
-async def ui_add_to_project_page(request: Request, user=Depends(require_user)):
+async def ui_add_to_project_page(request: Request, user=Depends(require_paid_user)):
     project_id = await _ensure_project_selected(request)
     if not project_id:
-        return RedirectResponse("/ui/dashboard", status_code=303)
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
 
     return request.app.state.templates.TemplateResponse(
         "add_to_project.html",
@@ -672,41 +924,14 @@ async def ui_add_to_project_post(
     )
 
 
-# @router.post("/projects/add_one")
-# async def ui_add_one_from_search(
-#     request: Request,
-#     document_id: str = Form(...),
-#     user=Depends(require_role("admin", "reviewer")),
-# ):
-#     project_id = await _ensure_project_selected(request)
-#     if not project_id:
-#         return RedirectResponse("/ui/dashboard", status_code=303)
-#
-#     await asgi_post_json(
-#         request,
-#         f"/projects/{project_id}/documents/add",
-#         {"document_ids": [document_id]},
-#     )
-#     return RedirectResponse("/ui/search", status_code=303)
-
 @router.post("/projects/add_one")
 async def ui_add_one_from_search(
     request: Request,
     document_id: str = Form(...),
     next: str | None = Form(None),
-    user=Depends(require_role("admin", "reviewer")),
+    # user=Depends(require_role("admin", "reviewer")),
+    user=Depends(require_paid_user)
 ):
-    """
-    Add a single document to the currently selected project.
-
-    Improvements:
-    - Supports `next` (URL-encoded) to redirect back to the originating page
-      (e.g., doc_detail).
-    - Falls back to /ui/search?core=... instead of plain /ui/search.
-    """
-    import os
-    import urllib.parse
-
     project_id = await _ensure_project_selected(request)
     if not project_id:
         return RedirectResponse("/ui/dashboard", status_code=303)
@@ -717,27 +942,22 @@ async def ui_add_one_from_search(
         {"document_ids": [document_id]},
     )
 
-    # Determine core for fallback redirects
     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
     if not core:
         core = "hitl_test"
     request.session["core"] = core
 
-    # Prefer redirecting back to where the user came from
     if next:
         try:
             target = urllib.parse.unquote(next)
-            # Basic safety: only allow relative or same-host URLs
             if target.startswith("/"):
                 return RedirectResponse(target, status_code=303)
-            # allow absolute back to same app host
             u = urllib.parse.urlparse(target)
             if u.scheme in ("http", "https") and (u.netloc == "" or u.netloc == "app" or u.netloc == "localhost:8000"):
                 return RedirectResponse(target, status_code=303)
         except Exception:
             pass
 
-    # If no next, try Referer, else search
     ref = request.headers.get("referer")
     if ref:
         return RedirectResponse(ref, status_code=303)
@@ -745,9 +965,9 @@ async def ui_add_one_from_search(
     return RedirectResponse(f"/ui/search?core={core}", status_code=303)
 
 
-# -------------------------
-# Export page
-# -------------------------
+# ============================================================
+# Export
+# ============================================================
 @router.get("/export", response_class=HTMLResponse)
 async def ui_export_page(
     request: Request,
@@ -755,11 +975,11 @@ async def ui_export_page(
     code: str | None = None,
     include_annotators: str | None = None,
     metric: str = "value",
-    user=Depends(require_user),
+    user=Depends(require_paid_user),
 ):
     project_id = await _ensure_project_selected(request)
     if not project_id:
-        return RedirectResponse("/ui/dashboard", status_code=303)
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
 
     codes_res = await asgi_get(request, "/codes", params={})
     codes = codes_res.get("codes", []) or []
@@ -780,14 +1000,14 @@ async def ui_export_page(
     )
 
 
-# -------------------------
+# ============================================================
 # Codes page
-# -------------------------
+# ============================================================
 @router.get("/codes", response_class=HTMLResponse)
 async def ui_codes_page(
     request: Request,
     include_inactive: str | None = None,
-    user=Depends(require_user),
+    user=Depends(require_paid_user),
 ):
     res = await asgi_get(request, "/codes", params={"include_inactive": bool(include_inactive)})
     return request.app.state.templates.TemplateResponse(
@@ -843,504 +1063,46 @@ async def ui_codes_deactivate(
     return RedirectResponse("/ui/codes", status_code=303)
 
 
-# # -------------------------
-# # Document detail (Review)
-# # -------------------------
-@router.get("/docs/{document_id}", response_class=HTMLResponse)
-async def ui_doc_detail(request: Request, document_id: str, user=Depends(require_user)):
+# ============================================================
+# Topic run resolver
+# ============================================================
+def _get_active_topic_run_id(db, user_id: Optional[str]) -> Optional[str]:
     """
-    Document detail page.
-
-    Fixes:
-    - Avoid hardcoding Solr core ("hitl_test"). Uses:
-        1) ?core= query param
-        2) session["core"]
-        3) env SOLR_GLOBAL_CORE
-        4) fallback "hitl_test"
-      and persists the chosen core to session.
-
-    - Removes Hypothesis link logic entirely (user only wants to open canonical URL).
-    - Speeds up doc_detail by calling /search with include_facets=0 (no facet work).
-    - Passes `core` into the template context so templates can preserve it in links.
-    - Adds `return_to` so Add-to-Project can redirect back to this doc.
+    Resolve the active topic run ID for THIS USER only.
+    No project scoping.
     """
-    import os
-    import urllib.parse
+    if not user_id:
+        return None
 
-    # --- determine Solr core (query -> session -> env -> default) ---
-    core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
-    if not core:
-        core = "hitl_test"
-    request.session["core"] = core
-
-    project_id = await _ensure_project_selected(request)
-    if not project_id:
-        return RedirectResponse("/ui/dashboard", status_code=303)
-
-    # --- check if doc is in current project ---
-    in_project = False
-    try:
-        proj_res = await asgi_get(
-            request,
-            f"/projects/{project_id}/documents",
-            params={"limit": 5000, "offset": 0},
+    r = (
+        db.execute(
+            select(TopicRun)
+            .where(TopicRun.created_by == str(user_id))
+            .where(TopicRun.is_active.is_(True))
+            .order_by(TopicRun.created_at.desc())
         )
-        ids = set(proj_res.get("document_ids", []) or [])
-        in_project = document_id in ids
-    except Exception:
-        in_project = False
-
-    # --- fetch document from Solr (by id) ---
-    doc_res = await asgi_get(
-        request,
-        "/search",
-        params={
-            "q": f'document_id_s:"{_solr_escape_phrase(document_id)}"',
-            "core": core,
-            "rows": 1,
-            "start": 0,
-            "include_facets": "0",  # ✅ SPEED: doc_detail doesn’t need facets
-            "fl": ",".join(
-                [
-                    "document_id_s",
-                    "canonical_url_s",
-                    "title_txt",
-                    "excerpt_txt",
-                    "published_dt",
-                    "doc_type_s",
-                    "source_s",
-                    "has_human_b",
-                    "has_model_b",
-                    "codes_present_human_ss",
-                    "codes_present_model_ss",
-                    "code_value_human_kv_ss",
-                    "code_value_human_norm_kv_ss",
-                    "code_value_model_kv_ss",
-                    "code_value_model_norm_kv_ss",
-                ]
-            ),
-        },
+        .scalars()
+        .first()
     )
-
-    docs = doc_res.get("docs", []) or []
-    doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
-
-    # --- resolve run_id (session -> active fallback) ---
-    run_id = _get_run_id(request)
-    if not run_id:
-        db = SessionLocal()
-        try:
-            run_id = _get_active_topic_run_id(db, project_id=None)
-        finally:
-            db.close()
-        _set_run_id(request, run_id)
-
-    # --- document topics ---
-    topics: list[dict] = []
-    if run_id:
-        topics_res = await asgi_get(
-            request,
-            f"/documents/{document_id}/topics",
-            params={"run_id": run_id},
-        )
-        topics = topics_res.get("topics", []) or []
-
-    # --- codes UI view ---
-    codes_view, code_stats = build_codes_view(doc)
-
-    # Prefer explicit back_url param, else referer, else search (preserve core)
-    back_url = request.query_params.get("back_url") or request.headers.get("referer") or f"/ui/search?core={core}"
-
-    # helpful for redirect-back after POST actions
-    return_to = urllib.parse.quote(str(request.url), safe="")
-
-    return request.app.state.templates.TemplateResponse(
-        "doc_detail.html",
-        {
-            "request": request,
-            "user": user,
-            "project_id": project_id,
-            "project_name": _get_project_name(request),
-            "core": core,
-            "doc": doc,
-            "run_id": run_id,
-            "topics": topics,
-            "in_project": in_project,
-            "back_url": back_url,
-            "return_to": return_to,  # ✅ use this in doc_detail Add button
-            "codes_view": codes_view,
-            "code_stats": code_stats,
-        },
-    )
-
-
-# -------------------------
-# Document detail (Review)
-# -------------------------
-# @router.get("/docs/{document_id}", response_class=HTMLResponse)
-# async def ui_doc_detail(request: Request, document_id: str, user=Depends(require_user)):
-#     """
-#     Document detail page.
-#
-#     Fixes:
-#     - Avoid hardcoding Solr core ("hitl_test"). Uses:
-#         1) ?core= query param
-#         2) session["core"]
-#         3) env SOLR_GLOBAL_CORE
-#         4) fallback "hitl_test"
-#       and persists the chosen core to session.
-#
-#     - Removes Hypothesis link logic entirely (user only wants to open canonical URL).
-#     - Passes `core` into the template context so templates can preserve it in links.
-#     """
-#
-#     # --- determine Solr core (query -> session -> env -> default) ---
-#     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
-#     if not core:
-#         core = "hitl_test"
-#     request.session["core"] = core
-#
-#     project_id = await _ensure_project_selected(request)
-#     if not project_id:
-#         return RedirectResponse("/ui/dashboard", status_code=303)
-#
-#     # --- check if doc is in current project ---
-#     in_project = False
-#     try:
-#         proj_res = await asgi_get(
-#             request,
-#             f"/projects/{project_id}/documents",
-#             params={"limit": 5000, "offset": 0},
-#         )
-#         ids = set(proj_res.get("document_ids", []) or [])
-#         in_project = document_id in ids
-#     except Exception:
-#         in_project = False
-#
-#     # --- fetch document from Solr (by id) ---
-#     doc_res = await asgi_get(
-#         request,
-#         "/search",
-#         params={
-#             "q": f'document_id_s:"{_solr_escape_phrase(document_id)}"',
-#             "core": core,
-#             "rows": 1,
-#             "start": 0,
-#             "fl": ",".join(
-#                 [
-#                     "document_id_s",
-#                     "canonical_url_s",
-#                     "title_txt",
-#                     "excerpt_txt",
-#                     "published_dt",
-#                     "doc_type_s",
-#                     "source_s",
-#                     "has_human_b",
-#                     "has_model_b",
-#                     "codes_present_human_ss",
-#                     "codes_present_model_ss",
-#                     "code_value_human_kv_ss",
-#                     "code_value_human_norm_kv_ss",
-#                     "code_value_model_kv_ss",
-#                     "code_value_model_norm_kv_ss",
-#                 ]
-#             ),
-#         },
-#     )
-#
-#     docs = doc_res.get("docs", []) or []
-#     doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
-#
-#     # --- resolve run_id (session -> active fallback) ---
-#     run_id = _get_run_id(request)
-#     if not run_id:
-#         db = SessionLocal()
-#         try:
-#             run_id = _get_active_topic_run_id(db, project_id=None)
-#         finally:
-#             db.close()
-#         _set_run_id(request, run_id)
-#
-#     # --- document topics ---
-#     topics: list[dict] = []
-#     if run_id:
-#         topics_res = await asgi_get(
-#             request,
-#             f"/documents/{document_id}/topics",
-#             params={"run_id": run_id},
-#         )
-#         topics = topics_res.get("topics", []) or []
-#
-#     # --- codes UI view ---
-#     codes_view, code_stats = build_codes_view(doc)
-#
-#     # Prefer explicit back_url param, else referer, else search (preserve core)
-#     back_url = request.query_params.get("back_url") or request.headers.get("referer") or f"/ui/search?core={core}"
-#
-#     return request.app.state.templates.TemplateResponse(
-#         "doc_detail.html",
-#         {
-#             "request": request,
-#             "user": user,
-#             "project_id": project_id,
-#             "project_name": _get_project_name(request),
-#             "core": core,  # IMPORTANT: preserve core in templates/links
-#             "doc": doc,
-#             "run_id": run_id,
-#             "topics": topics,
-#             "in_project": in_project,
-#             "back_url": back_url,
-#             "codes_view": codes_view,
-#             "code_stats": code_stats,
-#         },
-#     )
-
-
-
-# -------------------------
-# Topic actions (HTML forms)
-# -------------------------
-# @router.post("/topics/accept")
-# async def ui_topic_accept(
-#     request: Request,
-#     document_id: str = Form(...),
-#     topic_label: str = Form(...),
-#     run_id: str = Form(...),
-#     topic_key: str = Form(""),  # <-- optional
-#     user=Depends(require_role("admin", "reviewer")),
-# ):
-#     form = await request.form()
-#
-#     doc_id = (form.get("document_id") or "").strip()
-#     topic_label = (form.get("topic_label") or "").strip()
-#     topic_key = (form.get("topic_key") or "").strip() or None
-#     run_id = (form.get("run_id") or "").strip() or None
-#
-#     if not doc_id or not topic_label:
-#         raise HTTPException(400, "document_id and topic_label are required")
-#
-#     # ✅ if run_id missing, recover from DB (instead of sending blank -> 422)
-#     if not run_id:
-#         db = SessionLocal()
-#         try:
-#             # if you store current project in session, use it; otherwise pass None
-#             project_id = request.session.get("project_id")  # adjust to your session key
-#             run_id = _get_active_topic_run_id(db, project_id)
-#         finally:
-#             db.close()
-#
-#     if not run_id:
-#         run = get_or_create_active_global_run(db, actor=None)
-#         # raise HTTPException(
-#         #     400,
-#         #     "No active topic run. Create a run and activate it first (/topics/runs then /topics/runs/{run_id}/activate)."
-#         # )
-#
-#     payload = {
-#         "run_id": run_id,
-#         "document_id": doc_id,
-#         "topic_label": topic_label,
-#         "topic_key": topic_key,  # optional
-#         "user": request.session.get("username") or None,  # if you store it
-#     }
-#
-#     # await asgi_post_json(request, "http://localhost:8000/topics/label", payload)
-#     await asgi_post_json(request, "http://localhost:8000/topics/label", payload)
-
-
-@router.post("/topics/accept")
-async def ui_topic_accept(
-    request: Request,
-    document_id: str = Form(...),
-    topic_label: str = Form(...),
-    run_id: str = Form(""),          # <-- optional now
-    topic_key: str = Form(""),
-    user=Depends(require_role("admin", "reviewer")),
-):
-    form = await request.form()
-
-    doc_id = (form.get("document_id") or "").strip()
-    topic_label = (form.get("topic_label") or "").strip()
-    topic_key = (form.get("topic_key") or "").strip() or None
-    run_id = (form.get("run_id") or "").strip() or None
-
-    if not doc_id or not topic_label:
-        raise HTTPException(400, "document_id and topic_label are required")
-
-    # Always resolve run_id from DB if missing (GLOBAL)
-    if not run_id:
-        db = SessionLocal()
-        try:
-            run_id = _get_active_topic_run_id(db, project_id=None)  # GLOBAL only
-            if not run_id:
-                run = get_or_create_active_global_run(db, actor=user.get("username"))
-                run_id = str(run.run_id)
-        finally:
-            db.close()
-
-    # persist in session so doc_detail uses it
-    _set_run_id(request, run_id)
-
-    payload = {
-        "run_id": run_id,
-        "document_id": doc_id,
-        "topic_label": topic_label,
-        "topic_key": topic_key,
-        "user": user.get("username"),
-    }
-
-    await asgi_post_json(request, "/topics/label", payload)
-
-    return RedirectResponse(f"/ui/docs/{doc_id}", status_code=303)
-
-@router.post("/topics/reject")
-async def ui_topic_reject(
-    request: Request,
-    document_id: str = Form(...),
-    topic_key: str = Form(...),
-    run_id: str = Form(...),
-    user=Depends(require_role("admin", "reviewer")),
-):
-    await asgi_post_json(
-        request,
-        "/topics/reject",
-        {
-            "run_id": run_id,
-            "document_id": document_id,
-            "topic_key": topic_key,
-            "user": user["username"],
-        },
-    )
-    return RedirectResponse(f"/ui/docs/{document_id}", status_code=303)
-
-
-@router.post("/topics/delete")
-async def ui_topic_delete(
-    request: Request,
-    document_id: str = Form(...),
-    topic_key: str = Form(...),
-    run_id: str = Form(...),
-    user=Depends(require_role("admin", "reviewer")),
-):
-    await asgi_post_json(
-        request,
-        "/topics/label/delete",
-        {
-            "run_id": run_id,
-            "document_id": document_id,
-            "topic_key": topic_key,
-            "user": user["username"],
-        },
-    )
-    return RedirectResponse(f"/ui/docs/{document_id}", status_code=303)
-
-
-# -------------------------
-# Project creation (bootstrap)
-# -------------------------
-@router.post("/projects/create")
-async def ui_create_project(
-    request: Request,
-    name: str = Form(...),
-    team_name: str = Form("Default Team"),
-    user=Depends(require_role("admin", "reviewer")),
-):
-    created = await asgi_post_json(
-        request,
-        "/projects/bootstrap",
-        {"name": name, "team_name": team_name or "Default Team"},
-    )
-
-    project_id = created.get("project_id")
-    if project_id:
-        _set_project_id(request, project_id)
-        _set_project_name(request, name)
-        _set_run_id(request, None)
-
-    return RedirectResponse("/ui/search", status_code=303)
-
-
-
-
-
-
-
-# add helper somewhere in ui/routes.py
-
-
-
-def _get_active_topic_run_id(db, project_id: Optional[str]) -> Optional[str]:
-    """
-    Resolve the active topic run ID.
-
-    Priority:
-      1) Active run for the current project (if project_id provided)
-      2) Active global run (project_id IS NULL)
-
-    Returns:
-      run_id as string, or None if no active run exists
-    """
-
-    base_q = select(TopicRun).where(TopicRun.is_active.is_(True))
-
-    # 1️⃣ Prefer project-scoped active run
-    if project_id:
-        try:
-            proj_uuid = UUID(project_id)
-            r = db.execute(
-                base_q.where(TopicRun.project_id == proj_uuid)
-            ).scalars().first()
-            if r:
-                return str(r.run_id)
-        except Exception:
-            # invalid UUID or DB issue → safely ignore and fall back
-            pass
-
-    # 2️⃣ Fallback: global active run
-    r = db.execute(
-        base_q.where(TopicRun.project_id.is_(None))
-    ).scalars().first()
-
     return str(r.run_id) if r else None
 
 
 
 
-
-
-
-################code views#################
-
-from collections import defaultdict
-from typing import Any, Dict, List, Tuple
-
-from typing import Any, Dict, List
-
+# ============================================================
+# Codes view helpers (from your snippet)
+# ============================================================
 def _kv_list_to_map(kv_list: Any) -> Dict[str, List[str]]:
-    """
-    Convert various KV formats into:
-      {"OffSex": ["he"], "MitFactSent": ["foo", "bar"]}
-
-    Accepts:
-      - ["OffSex=he", "MitFactSent=foo", "MitFactSent=bar"]
-      - ["OffSex:he", ...]
-      - ["OffSex|he", ...]
-      - ["OffSex\the", ...]
-      - [{"code":"OffSex","value":"he"}, ...]
-      - [{"k":"OffSex","v":"he"}, ...]
-    """
     out: Dict[str, List[str]] = {}
 
     if kv_list is None:
         return out
 
-    # If Solr returns a single string, treat as one-item list
     if isinstance(kv_list, str):
         items = [kv_list]
     elif isinstance(kv_list, list):
         items = kv_list
     else:
-        # handle accidental dict (single KV)
         items = [kv_list]
 
     def _add(k: str, v: Any) -> None:
@@ -1354,27 +1116,15 @@ def _kv_list_to_map(kv_list: Any) -> Dict[str, List[str]]:
             return
         out.setdefault(k, []).append(v_str)
 
-    # Supported separators in order of preference
     seps = ["=", ":", "|", "\t"]
 
     for item in items:
         if item is None:
             continue
 
-        # dict-like item
         if isinstance(item, dict):
-            k = (
-                item.get("code")
-                or item.get("key")
-                or item.get("k")
-                or item.get("name")
-            )
-            v = (
-                item.get("value")
-                or item.get("val")
-                or item.get("v")
-                or item.get("text")
-            )
+            k = item.get("code") or item.get("key") or item.get("k") or item.get("name")
+            v = item.get("value") or item.get("val") or item.get("v") or item.get("text")
             if k is not None and v is not None:
                 _add(str(k), v)
             continue
@@ -1383,16 +1133,13 @@ def _kv_list_to_map(kv_list: Any) -> Dict[str, List[str]]:
         if not s:
             continue
 
-        # find first matching separator
         k = None
         v = None
         for sep in seps:
             if sep in s:
                 k, v = s.split(sep, 1)
                 break
-
         if k is None:
-            # not parseable as KV; skip
             continue
 
         _add(k, v)
@@ -1400,47 +1147,16 @@ def _kv_list_to_map(kv_list: Any) -> Dict[str, List[str]]:
     return out
 
 
-
-def _normalize_list_field(x):
-    if x is None:
-        return []
-    if isinstance(x, list):
-        return x
-    return [x]
-
-
-from typing import Any, Dict, List, Tuple, Set
-
 def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-    """
-    Builds the UI table for codes.
-
-    Reads from any of these fields if present (first match wins per category):
-      Human raw:
-        - code_value_human_kv_ss
-      Human normalized:
-        - code_value_human_norm_kv_ss
-      Model raw:
-        - code_value_model_kv_ss
-      Model normalized:
-        - code_value_model_norm_kv_ss
-
-    Also supports some common alternates if your schema differs:
-      - code_values_human_kv_ss
-      - code_values_human_norm_kv_ss
-      - code_values_model_kv_ss
-      - code_values_model_norm_kv_ss
-    """
-
     def _first_present(*keys: str) -> Any:
         for k in keys:
             if k in doc and doc.get(k) is not None:
                 return doc.get(k)
         return None
 
-    human_raw  = _kv_list_to_map(_first_present("code_value_human_kv_ss", "code_values_human_kv_ss"))
+    human_raw = _kv_list_to_map(_first_present("code_value_human_kv_ss", "code_values_human_kv_ss"))
     human_norm = _kv_list_to_map(_first_present("code_value_human_norm_kv_ss", "code_values_human_norm_kv_ss"))
-    model_raw  = _kv_list_to_map(_first_present("code_value_model_kv_ss", "code_values_model_kv_ss"))
+    model_raw = _kv_list_to_map(_first_present("code_value_model_kv_ss", "code_values_model_kv_ss"))
     model_norm = _kv_list_to_map(_first_present("code_value_model_norm_kv_ss", "code_values_model_norm_kv_ss"))
 
     all_codes: Set[str] = set(human_raw) | set(human_norm) | set(model_raw) | set(model_norm)
@@ -1449,7 +1165,6 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
     disagree_count = 0
 
     def _norm_set(values: List[str]) -> Set[str]:
-        # normalize for disagreement check (case/space insensitive)
         return {str(v).strip().lower() for v in (values or []) if str(v).strip()}
 
     for code in sorted(all_codes):
@@ -1461,14 +1176,12 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
         has_human = bool(hr or hn)
         has_model = bool(mr or mn)
 
-        # prefer normalized for disagree detection; fall back to raw
         a = _norm_set(hn) if hn else _norm_set(hr)
         b = _norm_set(mn) if mn else _norm_set(mr)
         disagree = bool(has_human and has_model and a and b and a != b)
         if disagree:
             disagree_count += 1
 
-        # best value for display
         best = None
         src = None
         if hn:
@@ -1513,3 +1226,356 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
     }
     return rows, stats
 
+
+# ============================================================
+# Document detail
+# ============================================================
+# @router.get("/docs/{document_id}", response_class=HTMLResponse)
+# async def ui_doc_detail(request: Request, document_id: str, user=Depends(require_paid_user)):
+#     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
+#     if not core:
+#         core = "hitl_test"
+#     request.session["core"] = core
+#
+#     project_id = await _ensure_project_selected(request)
+#     if not project_id:
+#         return RedirectResponse("/ui/dashboard", status_code=303)
+#
+#     in_project = False
+#     try:
+#         proj_res = await asgi_get(
+#             request,
+#             f"/projects/{project_id}/documents",
+#             params={"limit": 5000, "offset": 0},
+#         )
+#         ids = set(proj_res.get("document_ids", []) or [])
+#         in_project = document_id in ids
+#     except Exception:
+#         in_project = False
+#
+#     doc_res = await asgi_get(
+#         request,
+#         "/search",
+#         params={
+#             "q": f'document_id_s:"{_solr_escape_phrase(document_id)}"',
+#             "core": core,
+#             "rows": 1,
+#             "start": 0,
+#             "include_facets": "0",
+#             "fl": ",".join(
+#                 [
+#                     "document_id_s",
+#                     "canonical_url_s",
+#                     "title_txt",
+#                     "excerpt_txt",
+#                     "published_dt",
+#                     "doc_type_s",
+#                     "source_s",
+#                     "has_human_b",
+#                     "has_model_b",
+#                     "codes_present_human_ss",
+#                     "codes_present_model_ss",
+#                     "code_value_human_kv_ss",
+#                     "code_value_human_norm_kv_ss",
+#                     "code_value_model_kv_ss",
+#                     "code_value_model_norm_kv_ss",
+#                 ]
+#             ),
+#         },
+#     )
+#
+#     docs = doc_res.get("docs", []) or []
+#     doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
+#
+#     run_id = _get_run_id(request)
+#     uid = user.get("id") or user.get("user_id") or user.get("sub")
+#
+#     if not run_id:
+#         db = SessionLocal()
+#         try:
+#             run_id = _get_active_topic_run_id(db, project_id=project_id, user_id=str(uid) if uid else None)
+#         finally:
+#             db.close()
+#         _set_run_id(request, run_id)
+#
+#     topics: list[dict] = []
+#     if run_id:
+#         topics_res = await asgi_get(request, f"/documents/{document_id}/topics", params={"run_id": run_id})
+#         topics = topics_res.get("topics", []) or []
+#
+#     codes_view, code_stats = build_codes_view(doc)
+#
+#     back_url = request.query_params.get("back_url") or request.headers.get("referer") or f"/ui/search?core={core}"
+#     return_to = urllib.parse.quote(str(request.url), safe="")
+#
+#     return request.app.state.templates.TemplateResponse(
+#         "doc_detail.html",
+#         {
+#             "request": request,
+#             "user": user,
+#             "project_id": project_id,
+#             "project_name": _get_project_name(request),
+#             "core": core,
+#             "doc": doc,
+#             "run_id": run_id,
+#             "topics": topics,
+#             "in_project": in_project,
+#             "back_url": back_url,
+#             "return_to": return_to,
+#             "codes_view": codes_view,
+#             "code_stats": code_stats,
+#         },
+#     )
+@router.get("/docs/{document_id}", response_class=HTMLResponse)
+async def ui_doc_detail(request: Request, document_id: str, user=Depends(require_paid_user)):
+    import os
+
+    core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
+    if not core:
+        core = "hitl_test"
+    request.session["core"] = core
+
+    project_id = await _ensure_project_selected(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard", status_code=303)
+
+    # Check doc is in current project
+    in_project = False
+    try:
+        proj_res = await asgi_get(
+            request,
+            f"/projects/{project_id}/documents",
+            params={"limit": 5000, "offset": 0},
+        )
+        ids = set(proj_res.get("document_ids", []) or [])
+        in_project = document_id in ids
+    except Exception:
+        in_project = False
+
+    # Fetch document from Solr
+    doc_res = await asgi_get(
+        request,
+        "/search",
+        params={
+            "q": f'document_id_s:"{_solr_escape_phrase(document_id)}"',
+            "core": core,
+            "rows": 1,
+            "start": 0,
+            "include_facets": "0",
+            "fl": ",".join(
+                [
+                    "document_id_s",
+                    "canonical_url_s",
+                    "title_txt",
+                    "excerpt_txt",
+                    "published_dt",
+                    "doc_type_s",
+                    "source_s",
+                    "has_human_b",
+                    "has_model_b",
+                    "codes_present_human_ss",
+                    "codes_present_model_ss",
+                    "code_value_human_kv_ss",
+                    "code_value_human_norm_kv_ss",
+                    "code_value_model_kv_ss",
+                    "code_value_model_norm_kv_ss",
+                ]
+            ),
+        },
+    )
+    docs = doc_res.get("docs", []) or []
+    doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
+
+    # Resolve run_id per project + user (NO global)
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    run_id = _get_run_id(request)
+
+    if not run_id:
+        db = SessionLocal()
+        try:
+            run_id = _get_active_topic_run_id(db, user_id=str(uid) if uid else None)
+        finally:
+            db.close()
+        _set_run_id(request, run_id)
+
+    # Load topics for this run (if exists)
+    topics: list[dict] = []
+    if run_id:
+        topics_res = await asgi_get(
+            request,
+            f"/documents/{document_id}/topics",
+            params={"run_id": run_id},
+        )
+        topics = topics_res.get("topics", []) or []
+
+    codes_view, code_stats = build_codes_view(doc)
+
+    back_url = request.query_params.get("back_url") or request.headers.get("referer") or f"/ui/search?core={core}"
+    return_to = request.url.path + f"?core={core}"
+
+    return request.app.state.templates.TemplateResponse(
+        "doc_detail.html",
+        {
+            "request": request,
+            "user": user,
+            "project_id": project_id,
+            "project_name": _get_project_name(request),
+            "core": core,
+            "doc": doc,
+            "run_id": run_id,
+            "topics": topics,
+            "in_project": in_project,
+            "back_url": back_url,
+            "return_to": return_to,
+            "codes_view": codes_view,
+            "code_stats": code_stats,
+        },
+    )
+
+
+# ============================================================
+# Topic actions
+# ============================================================
+@router.post("/topics/accept")
+async def ui_topic_accept(
+    request: Request,
+    document_id: str = Form(...),
+    topic_label: str = Form(...),
+    run_id: str = Form(""),
+    topic_key: str = Form(""),
+    user=Depends(require_paid_user),
+):
+    form = await request.form()
+
+    doc_id = (form.get("document_id") or "").strip()
+    topic_label = (form.get("topic_label") or "").strip()
+    topic_key = (form.get("topic_key") or "").strip() or None
+    run_id = (form.get("run_id") or "").strip() or None
+
+    if not doc_id or not topic_label:
+        raise HTTPException(400, "document_id and topic_label are required")
+
+    project_id = await _ensure_project_selected(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    if not uid:
+        raise HTTPException(401, "Not authenticated")
+
+    # Resolve per-user, per-project run if missing
+    if not run_id:
+        db = SessionLocal()
+        try:
+            run_id = _get_active_topic_run_id(db, user_id=str(uid))
+        finally:
+            db.close()
+
+    if run_id:
+        _set_run_id(request, run_id)
+
+    payload = {
+        "project_id": project_id,
+        "run_id": run_id,  # can be None -> API will create user+project run
+        "document_id": doc_id,
+        "topic_label": topic_label,
+        "topic_key": topic_key,  # optional; backend can generate deterministically from label
+    }
+
+    await asgi_post_json(request, "/topics/label", payload)
+    return RedirectResponse(f"/ui/docs/{doc_id}", status_code=303)
+
+
+
+
+@router.post("/topics/reject")
+async def ui_topic_reject(
+    request: Request,
+    document_id: str = Form(...),
+    topic_key: str = Form(...),
+    run_id: str = Form(...),
+    user=Depends(require_paid_user),
+):
+    await asgi_post_json(
+        request,
+        "/topics/reject",
+        {
+            "run_id": (run_id or "").strip(),
+            "document_id": (document_id or "").strip(),
+            "topic_key": (topic_key or "").strip(),
+        },
+    )
+    return RedirectResponse(f"/ui/docs/{document_id}", status_code=303)
+
+
+
+
+@router.post("/topics/delete")
+async def ui_topic_delete(
+    request: Request,
+    document_id: str = Form(...),
+    topic_key: str = Form(...),
+    run_id: str = Form(...),
+    user=Depends(require_paid_user),
+):
+    await asgi_post_json(
+        request,
+        "/topics/label/delete",
+        {
+            "run_id": (run_id or "").strip(),
+            "document_id": (document_id or "").strip(),
+            "topic_key": (topic_key or "").strip(),
+        },
+    )
+    return RedirectResponse(f"/ui/docs/{document_id}", status_code=303)
+
+
+
+
+# ============================================================
+# Projects (create/bootstrap)
+# ============================================================
+@router.post("/projects/create")
+async def ui_create_project(
+    request: Request,
+    name: str = Form(...),
+    description: str = Form(""),
+    team_name: str = Form("Default Team"),
+    # user=Depends(require_role("admin", "reviewer")),
+    user=Depends(require_paid_user),
+):
+    name_clean = (name or "").strip()
+    desc = (description or "").strip()
+
+    if not name_clean:
+        return RedirectResponse("/ui/dashboard?msg=Project%20name%20is%20required", status_code=303)
+
+    if len(desc) > 1000:
+        return RedirectResponse("/ui/dashboard?msg=Description%20must%20be%201000%20characters%20or%20less", status_code=303)
+
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    if uid is None:
+        return RedirectResponse("/ui/dashboard?msg=Could%20not%20determine%20your%20user%20id", status_code=303)
+
+    created = await asgi_post_json(
+        request,
+        "/projects/bootstrap",
+        {
+            "name": name_clean,
+            "team_name": team_name or "Default Team",
+            "description": desc,
+            "creator_user_id": str(uid),
+        },
+    )
+
+    project_id = created.get("project_id")
+    if project_id:
+        _set_project_id(request, project_id)
+        _set_project_name(request, name_clean)
+        _set_run_id(request, None)
+
+    return RedirectResponse("/ui/search", status_code=303)
+
+#
+#
+#

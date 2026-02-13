@@ -37,7 +37,7 @@ class Project(Base):
     project_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_id = Column(UUID(as_uuid=True), ForeignKey("teams.team_id"), nullable=False)
     name = Column(String, nullable=False)
-
+    description = Column(Text, nullable=True)
     team = relationship("Team")
 
 
@@ -182,7 +182,7 @@ class TopicRun(Base):
 
     run_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    # If null => "global" run; if set => project-scoped run
+    # # If null => personal (user-only) run; if set => project-scoped run (optional future)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=True)
 
     name = Column(String, nullable=False)

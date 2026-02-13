@@ -1,28 +1,35 @@
-<!doctype html>
-<html>
-<head>
-  <title>Login - HITL</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body class="centered">
-  <div class="card">
-    <h1>HITL Login</h1>
+{% extends "base.html" %}
+{% block content %}
 
-    {% if error %}
-      <div class="alert">{{ error }}</div>
-    {% endif %}
+<h1>Login</h1>
 
-    <form method="post" action="/auth/login">
-      <label>Username</label>
-      <input name="username" autocomplete="username" required>
+<div class="card" style="max-width: 420px; margin: 0 auto;">
 
-      <label>Password</label>
-      <input name="password" type="password" autocomplete="current-password" required>
+  {% if error %}
+    <div class="alert">{{ error }}</div>
+  {% endif %}
 
-      <button type="submit">Sign in</button>
-    </form>
+  <form method="post" action="/auth/login">
+    <div style="margin-bottom:12px;">
+      <label class="muted">Username or Email</label>
+      <input type="text" name="username" autocomplete="username" required style="width:100%;">
+    </div>
 
-    <p class="muted">Demo users: admin/admin, reviewer/reviewer, viewer/viewer</p>
+    <div style="margin-bottom:12px;">
+      <label class="muted">Password</label>
+      <input type="password" name="password" autocomplete="current-password" required style="width:100%;">
+    </div>
+
+    <button type="submit" class="btnlink" style="width:100%;">Login</button>
+  </form>
+
+  <hr style="margin:16px 0; border:none; border-top:1px solid #eee;">
+
+  <div style="text-align:center;">
+    <span class="muted">Don’t have an account?</span><br>
+    <a href="/auth/register" class="btnlink">Create an account</a>
   </div>
-</body>
-</html>
+
+</div>
+
+{% endblock %}

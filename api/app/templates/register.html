@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Create account</h1>
+<p class="muted" style="margin-top:-6px;">
+  New accounts get a <strong>7-day trial</strong>. You can also redeem an access code later if you received one.
+</p>
+
+<div class="card" style="max-width: 420px; margin: 0 auto;">
+
+  {% if error %}
+    <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="/auth/register">
+    <div style="margin-bottom:12px;">
+      <label class="muted">Email</label>
+      <input type="email" name="email" autocomplete="email" required style="width:100%;">
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label class="muted">Username</label>
+      <input type="text" name="username" autocomplete="username" required style="width:100%;">
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label class="muted">Password</label>
+      <input type="password" name="password" autocomplete="new-password" required minlength="8" style="width:100%;">
+      <div class="muted" style="margin-top:6px;">Minimum 8 characters.</div>
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label class="muted">Confirm password</label>
+      <input type="password" name="password2" autocomplete="new-password" required minlength="8" style="width:100%;">
+    </div>
+
+    <button type="submit" class="btnlink" style="width:100%;">Create account</button>
+  </form>
+
+  <hr style="margin:16px 0; border:none; border-top:1px solid #eee;">
+
+  <div style="text-align:center;">
+    <span class="muted">Already have an account?</span><br>
+    <a href="/auth/login" class="btnlink">Back to login</a>
+  </div>
+
+</div>
+
+{% endblock %}

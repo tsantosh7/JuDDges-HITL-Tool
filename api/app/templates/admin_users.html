@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Admin: Users & Access</h1>
+
+<div class="card" style="max-width: 980px; margin: 0 auto;">
+  <p class="muted" style="margin-top:-6px;">
+    Revoke sets plan to <code>free</code> and clears <code>access_until</code>.
+  </p>
+
+  {% if error %}
+    <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  {% if rows and rows|length > 0 %}
+    <div style="overflow:auto;">
+      <table style="width:100%; border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">User</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Email</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Role</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Plan</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Access until</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">
+                <strong>{{ r.username }}</strong>
+                <div class="muted" style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">
+                  {{ r.id }}
+                </div>
+              </td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">
+                <a class="btnlink" href="mailto:{{ r.email }}">{{ r.email }}</a>
+              </td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">{{ r.role }}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">
+                {% if r.plan %}
+                  <span class="pill">{{ r.plan }}</span>
+                {% else %}
+                  <span class="pill">free</span>
+                {% endif %}
+              </td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">
+                {{ r.access_until or "—" }}
+              </td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">
+                {% if r.role == "admin" %}
+                  <span class="muted">—</span>
+                {% else %}
+                  <form method="post" action="/auth/admin/users/revoke" onsubmit="return confirm('Revoke access for {{ r.username }}?');">
+                    <input type="hidden" name="user_id" value="{{ r.id }}">
+                    <button class="btnlink" type="submit">Revoke</button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="muted">No users found.</div>
+  {% endif %}
+
+  <div style="margin-top:12px;">
+    <a class="btnlink" href="/ui/dashboard">Back to dashboard</a>
+    <a class="btnlink" style="margin-left:10px;" href="/auth/admin/codes">Admin: Access Codes</a>
+  </div>
+</div>
+
+{% endblock %}

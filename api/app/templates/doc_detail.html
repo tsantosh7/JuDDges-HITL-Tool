@@ -113,7 +113,7 @@
       </div>
     {% endif %}
   {# ---------------- Manual add: label only (no topic_key) ---------------- #}
-  {% if user.role in ["admin", "reviewer"] %}
+{#  {% if user.role in ["admin", "reviewer"] %}#}
     <div class="card" style="margin: 10px 0 14px 0;">
       <h4 style="margin:0 0 8px 0;">Add / Accept topic</h4>
       <div class="muted" style="font-size:12px; margin-bottom:8px;">
@@ -133,7 +133,7 @@
         <button type="submit" class="btnlink">Add Topic</button>
       </form>
     </div>
-  {% endif %}
+{#  {% endif %}#}
 
   {% if not topics or topics|length == 0 %}
     <div class="muted">No topics found for this document.</div>
@@ -169,7 +169,8 @@
 
           <td class="actions">
   {# Accept/Reject for suggestions (non-human, active) #}
-  {% if user.role in ["admin", "reviewer"] and (st not in ["deleted", "rejected"]) and (at != "human") %}
+{#  {% if user.role in ["admin", "reviewer"] and (st not in ["deleted", "rejected"]) and (at != "human") %}#}
+    {% if (st not in ["deleted", "rejected"]) and (at != "human") %}
 
     {# Accept: convert the existing suggestion into a human label (no typing) #}
     <form method="post" action="/ui/topics/accept" style="display:inline;">
@@ -189,7 +190,8 @@
   {% endif %}
 
   {# Remove only for ACTIVE human labels #}
-  {% if user.role in ["admin", "reviewer"] and at == "human" and st == "active" %}
+{#  {% if user.role in ["admin", "reviewer"] and at == "human" and st == "active" %}#}
+      {% if at == "human" and st == "active" %}
     <form method="post" action="/ui/topics/delete" style="display:inline;" onsubmit="return confirm('Remove this topic label from this document?');">
       <input type="hidden" name="document_id" value="{{ doc_id }}">
       <input type="hidden" name="topic_key" value="{{ key }}">

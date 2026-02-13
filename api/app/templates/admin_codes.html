@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Admin: Access Codes</h1>
+
+<div class="card" style="max-width: 920px; margin: 0 auto;">
+
+  <p class="muted" style="margin-top:-6px;">
+    Generate trial/comped/paid codes. Plaintext is shown once only. Recent codes listed below (no plaintext).
+  </p>
+
+  {% if error %}
+    <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  {% if created %}
+    <div class="card" style="background:#fafafa; margin-top:12px;">
+      <h2 style="margin-top:0;">New code generated</h2>
+      <div class="row" style="gap:16px; align-items:flex-start;">
+        <div style="min-width:240px;">
+          <div class="muted">Code (copy now)</div>
+          <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 18px; padding: 8px 10px; border: 1px solid #eee; border-radius: 10px;">
+            {{ created.code }}
+          </div>
+        </div>
+        <div class="grow">
+          <div><strong>Plan:</strong> {{ created.plan_granted }}</div>
+          <div><strong>Days granted:</strong> {{ created.days_granted }}</div>
+          <div><strong>Max uses:</strong> {{ created.max_uses }}</div>
+          <div><strong>Allowed email:</strong> {{ created.allowed_email or "Any" }}</div>
+          <div><strong>Expires at:</strong> {{ created.expires_at }}</div>
+        </div>
+      </div>
+      <div class="muted" style="margin-top:8px;">
+        Redeem page: <code>/auth/redeem</code>
+      </div>
+    </div>
+  {% endif %}
+
+  <hr style="margin:16px 0; border:none; border-top:1px solid #eee;">
+
+  <form method="post" action="/auth/admin/codes">
+    <div class="row" style="gap:12px;">
+      <div class="grow">
+        <label class="muted">Allowed email (optional)</label>
+        <input name="allowed_email" placeholder="someone@example.com" style="width:100%;">
+      </div>
+      <div style="width:180px;">
+        <label class="muted">Plan</label>
+        <select name="plan_granted" style="width:100%;">
+          <option value="trial">trial</option>
+          <option value="comped">comped</option>
+          <option value="paid">paid</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row" style="gap:12px; margin-top:10px;">
+      <div style="width:170px;">
+        <label class="muted">Days granted</label>
+        <input name="days_granted" type="number" min="1" max="365" value="7" style="width:100%;">
+      </div>
+      <div style="width:190px;">
+        <label class="muted">Expires in (hours)</label>
+        <input name="expires_hours" type="number" min="1" max="8760" value="48" style="width:100%;">
+      </div>
+      <div style="width:170px;">
+        <label class="muted">Max uses</label>
+        <input name="max_uses" type="number" min="1" max="1000" value="1" style="width:100%;">
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <button type="submit" class="btnlink">Generate code</button>
+      <a href="/ui/dashboard" class="btnlink" style="margin-left:10px;">Back to dashboard</a>
+    </div>
+  </form>
+
+  <hr style="margin:18px 0; border:none; border-top:1px solid #eee;">
+
+  <h2 style="margin-top:0;">Recent codes</h2>
+
+  {% if codes and codes|length > 0 %}
+    <div style="overflow:auto;">
+      <table style="width:100%; border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Status</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Plan</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Days</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Uses</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Allowed email</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Expires</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">Hash</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in codes %}
+            <tr>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">
+                {% if c.status == "active" %}
+                  <span class="pill">active</span>
+                {% elif c.status == "used" %}
+                  <span class="pill">used</span>
+                {% else %}
+                  <span class="pill">expired</span>
+                {% endif %}
+              </td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">{{ c.plan_granted }}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">{{ c.days_granted }}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">{{ c.uses }}/{{ c.max_uses }}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">{{ c.allowed_email or "Any" }}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3;">{{ c.expires_at }}</td>
+              <td style="padding:8px; border-bottom:1px solid #f3f3f3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;">{{ c.code_hash_prefix }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="muted">No codes found.</div>
+  {% endif %}
+
+</div>
+
+{% endblock %}

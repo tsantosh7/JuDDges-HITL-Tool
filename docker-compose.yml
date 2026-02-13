@@ -31,7 +31,7 @@ services:
     user: "0:0"
     environment:
       - SOLR_HEAP=4g
-      - SOLR_JAVA_MEM=-Xms4g -Xmx4g    
+      - SOLR_JAVA_MEM=-Xms4g -Xmx4g
     command: >
       bash -lc "chown -R solr:solr /var/solr && su -s /bin/bash solr -c '/opt/solr/bin/solr -f'"
 
@@ -42,6 +42,7 @@ services:
     network_mode: "host"
     environment:
       DATABASE_URL: postgresql+psycopg://corpus:corpuspass@localhost:5432/corpusdb
+      SESSION_SECRET: supersecret
       SOLR_BASE_URL: http://localhost:8983/solr
       REDIS_URL: redis://localhost:6379/0
       FAISS_DIR: /data/faiss
@@ -53,6 +54,9 @@ services:
       - ./data:/app/data
       - ./training:/app/training
       - ./scripts:/app/scripts
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +76,9 @@ services:
       HYPOTHESIS_API_TOKEN: ${HYPOTHESIS_API_TOKEN}
     volumes:
       - faissdata:/data/faiss
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       - postgres
       - redis
