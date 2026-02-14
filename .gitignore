@@ -10,7 +10,7 @@ data/
 solrdata/
 __pycache__/
 *.pyc
-
+.idea/
 # snapshots
 data/hypothesis/
 

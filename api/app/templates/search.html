@@ -262,7 +262,9 @@
 {% block content %}
 <h1>Search Documents</h1>
 
-<form method="get" class="card" style="padding:14px;">
+{#<form method="get" class="card" style="padding:14px;">#}
+<form id="searchForm" method="get" class="card" style="padding:14px;">
+
   {# keep core sticky #}
   <input type="hidden" name="core" value="{{ core }}">
 
@@ -353,9 +355,6 @@
             <option value="{{ val }}" {% if code == val %}selected{% endif %}>{{ val }} ({{ cnt }})</option>
           {% endfor %}
         </select>
-        {% if (code_f|length) == 0 %}
-          <div class="muted" style="margin-top:6px;">No codes in current results</div>
-        {% endif %}
       </div>
 
       <div class="grow">
@@ -372,9 +371,7 @@
           {% endfor %}
         </select>
 
-        {% if (ut_f|length) == 0 %}
-          <div class="muted" style="margin-top:6px;">No topics in your current page results</div>
-        {% endif %}
+
       </div>
 
       <div style="min-width:220px;">
@@ -534,5 +531,46 @@
     </a>
   {% endif %}
 </div>
+
+<script>
+(function() {
+  const form = document.getElementById("searchForm");
+  if (!form) return;
+
+  function submitWithStartReset() {
+    // reset pagination when filters change
+    let start = form.querySelector('input[name="start"]');
+    if (!start) {
+      start = document.createElement("input");
+      start.type = "hidden";
+      start.name = "start";
+      form.appendChild(start);
+    }
+    start.value = "0";
+    form.submit();
+  }
+
+  const autoSubmitNames = new Set([
+    "scope",
+    "code",
+    "topic",
+    "has_human",
+    "has_any_span",
+    "include_codes_topics",
+    "kw_field"
+  ]);
+
+  // auto-submit on dropdown/checkbox changes
+  form.addEventListener("change", (e) => {
+    const el = e.target;
+    if (!el || !el.name) return;
+    if (autoSubmitNames.has(el.name)) {
+      submitWithStartReset();
+    }
+  });
+
+  // optional: hit Enter in keyword box submits normally
+})();
+</script>
 
 {% endblock %}

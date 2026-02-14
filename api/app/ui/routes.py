@@ -809,17 +809,36 @@ async def ui_search(
                 if did and lab:
                     topics_map.setdefault(str(did), []).append(str(lab))
 
-            facet_rows = db.execute(
+            # facet_rows = db.execute(
+            #     select(DocumentTopic.topic_label, func.count())
+            #     .where(DocumentTopic.run_id == UUID(run_id))
+            #     .where(DocumentTopic.status == "active")
+            #     .where(DocumentTopic.document_id.in_(doc_ids_on_page))
+            #     .group_by(DocumentTopic.topic_label)
+            #     .order_by(func.count().desc(), DocumentTopic.topic_label.asc())
+            #     .limit(50)
+            # ).all()
+            # ---- USER topic facet counts ----
+            facet_q = (
                 select(DocumentTopic.topic_label, func.count())
                 .where(DocumentTopic.run_id == UUID(run_id))
                 .where(DocumentTopic.status == "active")
-                .where(DocumentTopic.document_id.in_(doc_ids_on_page))
+            )
+
+            # Project scope: keep it restricted to the current page (existing behaviour)
+            # All corpus: show counts across the entire user's run (global within user scope)
+            if scope == "project":
+                facet_q = facet_q.where(DocumentTopic.document_id.in_(doc_ids_on_page))
+
+            facet_rows = db.execute(
+                facet_q
                 .group_by(DocumentTopic.topic_label)
                 .order_by(func.count().desc(), DocumentTopic.topic_label.asc())
                 .limit(50)
             ).all()
 
             user_topics_facet = [{"value": lab, "count": int(cnt)} for lab, cnt in facet_rows if lab]
+            # user_topics_facet = [{"value": lab, "count": int(cnt)} for lab, cnt in facet_rows if lab]
         finally:
             db.close()
 
@@ -1435,7 +1454,6 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
 
 # ============================================================
 # Topic actions
-# ============================================================
 @router.post("/topics/accept")
 async def ui_topic_accept(
     request: Request,
@@ -1449,41 +1467,52 @@ async def ui_topic_accept(
 
     doc_id = (form.get("document_id") or "").strip()
     topic_label = (form.get("topic_label") or "").strip()
-    topic_key = (form.get("topic_key") or "").strip() or None
-    run_id = (form.get("run_id") or "").strip() or None
+    topic_key = (form.get("topic_key") or "").strip()
+    run_id = (form.get("run_id") or "").strip()
 
     if not doc_id or not topic_label:
         raise HTTPException(400, "document_id and topic_label are required")
 
+    # Keep this if you want topic actions only inside a selected project (permission gate).
     project_id = await _ensure_project_selected(request)
     if not project_id:
-        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+        return RedirectResponse(
+            "/ui/dashboard?msg=Please%20select%20a%20project%20first",
+            status_code=303,
+        )
 
     uid = user.get("id") or user.get("user_id") or user.get("sub")
     if not uid:
         raise HTTPException(401, "Not authenticated")
 
-    # Resolve per-user, per-project run if missing
+    # USER-ONLY run resolution
     if not run_id:
         db = SessionLocal()
         try:
+            # IMPORTANT: this helper must be USER-only.
+            # It should return the active run_id for created_by == uid (project_id ignored / NULL).
             run_id = _get_active_topic_run_id(db, user_id=str(uid))
         finally:
             db.close()
 
+    # Store run in session for subsequent actions (delete/reject/etc.)
     if run_id:
         _set_run_id(request, run_id)
 
     payload = {
-        "project_id": project_id,
-        "run_id": run_id,  # can be None -> API will create user+project run
+        "project_id": project_id,      # still used by API assert_project_member(...) as a permission gate
+        "run_id": run_id or None,      # API will create user-only run if None
         "document_id": doc_id,
         "topic_label": topic_label,
-        "topic_key": topic_key,  # optional; backend can generate deterministically from label
     }
+
+    # Only include topic_key if user/UI provided it
+    if topic_key:
+        payload["topic_key"] = topic_key
 
     await asgi_post_json(request, "/topics/label", payload)
     return RedirectResponse(f"/ui/docs/{doc_id}", status_code=303)
+
 
 
 
