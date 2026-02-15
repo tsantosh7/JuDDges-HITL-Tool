@@ -467,134 +467,6 @@ async def ui_about(request: Request, user=Depends(require_user)):
 # ============================================================
 # Search Documents
 # ============================================================
-# @router.get("/search", response_class=HTMLResponse)
-# async def ui_search(
-#     request: Request,
-#     q: str = "",
-#     kw: str | None = None,
-#     kw_field: str = "all",
-#     include_codes_topics: str | None = "1",
-#     start: int = 0,
-#     scope: str = "all",
-#     code: str | None = None,
-#     topic: str | None = None,
-#     has_human: str | None = None,
-#     has_any_span: str | None = None,
-#     user=Depends(require_paid_user),
-# ):
-#     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
-#     if not core:
-#         core = "hitl_test"
-#     request.session["core"] = core
-#
-#     project_id = _get_project_id(request)
-#     project_name = _get_project_name(request)
-#
-#     rows = 20
-#     try:
-#         start_i = int(start)
-#     except Exception:
-#         start_i = 0
-#     if start_i < 0:
-#         start_i = 0
-#
-#     def _as_bool_choice(v: str | None) -> str | None:
-#         if v is None:
-#             return None
-#         s = str(v).strip().lower()
-#         if s in ("", "any", "all"):
-#             return None
-#         if s in ("1", "true", "yes", "y"):
-#             return "true"
-#         if s in ("0", "false", "no", "n"):
-#             return "false"
-#         return None
-#
-#     fq: list[str] = []
-#
-#     if code:
-#         fq.append(f'codes_all_ss:"{_solr_escape_phrase(code)}"')
-#     if topic:
-#         fq.append(f'topics_ss:"{_solr_escape_phrase(topic)}"')
-#
-#     human_choice = _as_bool_choice(has_human)
-#     if human_choice == "true":
-#         fq.append("has_human_b:true")
-#     elif human_choice == "false":
-#         fq.append("has_human_b:false")
-#
-#     span_choice = _as_bool_choice(has_any_span)
-#     if span_choice == "true":
-#         fq.append("has_any_span_b:true")
-#     elif span_choice == "false":
-#         fq.append("has_any_span_b:false")
-#
-#     advanced_q = (q or "").strip()
-#     kw_clean = (kw or "").strip()
-#
-#     if advanced_q:
-#         effective_q = advanced_q
-#     else:
-#         effective_q = build_user_friendly_q(
-#             kw_clean,
-#             kw_field,
-#             include_codes_topics=(include_codes_topics == "1" or include_codes_topics is None),
-#         )
-#
-#     fl = ",".join(
-#         [
-#             "document_id_s",
-#             "title_txt",
-#             "published_dt",
-#             "canonical_url_s",
-#             "has_human_b",
-#             "has_any_span_b",
-#         ]
-#     )
-#
-#     params = {
-#         "q": effective_q,
-#         "core": core,
-#         "rows": rows,
-#         "start": start_i,
-#         "fq": fq,
-#         "fl": fl,
-#         "include_facets": "1",
-#     }
-#
-#     if scope == "project":
-#         if not project_id:
-#             return RedirectResponse("/ui/dashboard", status_code=303)
-#         params["project_id"] = project_id
-#
-#     result = await asgi_get(request, "/search", params=params)
-#     facets = result.get("facets", {}) or {}
-#
-#     back_url_enc = urllib.parse.quote(str(request.url), safe="")
-#
-#     return request.app.state.templates.TemplateResponse(
-#         "search.html",
-#         {
-#             "request": request,
-#             "user": user,
-#             "core": core,
-#             "project_id": project_id,
-#             "project_name": project_name,
-#             "scope": scope,
-#             "q": advanced_q,
-#             "kw": kw_clean,
-#             "kw_field": kw_field,
-#             "include_codes_topics": include_codes_topics or "1",
-#             "start": start_i,
-#             "code": code,
-#             "topic": topic,
-#             "has_human": has_human,
-#             "has_any_span": has_any_span,
-#             "result": result,
-#             "facets": facets,
-#             "back_url_enc": back_url_enc,
-#         },
-#     )
 
 @router.get("/search", response_class=HTMLResponse)
 async def ui_search(
@@ -849,7 +721,11 @@ async def ui_search(
 
     result["docs"] = docs
     facets = result.get("facets", {}) or {}
-    back_url_enc = urllib.parse.quote(str(request.url), safe="")
+    # back_url_enc = urllib.parse.quote(str(request.url), safe="")
+    back_rel = request.url.path
+    if request.url.query:
+        back_rel += "?" + request.url.query
+    back_url_enc = urllib.parse.quote(back_rel, safe="")
 
     return request.app.state.templates.TemplateResponse(
         "search.html",
@@ -1249,127 +1125,33 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
 # ============================================================
 # Document detail
 # ============================================================
-# @router.get("/docs/{document_id}", response_class=HTMLResponse)
-# async def ui_doc_detail(request: Request, document_id: str, user=Depends(require_paid_user)):
-#     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
-#     if not core:
-#         core = "hitl_test"
-#     request.session["core"] = core
-#
-#     project_id = await _ensure_project_selected(request)
-#     if not project_id:
-#         return RedirectResponse("/ui/dashboard", status_code=303)
-#
-#     in_project = False
-#     try:
-#         proj_res = await asgi_get(
-#             request,
-#             f"/projects/{project_id}/documents",
-#             params={"limit": 5000, "offset": 0},
-#         )
-#         ids = set(proj_res.get("document_ids", []) or [])
-#         in_project = document_id in ids
-#     except Exception:
-#         in_project = False
-#
-#     doc_res = await asgi_get(
-#         request,
-#         "/search",
-#         params={
-#             "q": f'document_id_s:"{_solr_escape_phrase(document_id)}"',
-#             "core": core,
-#             "rows": 1,
-#             "start": 0,
-#             "include_facets": "0",
-#             "fl": ",".join(
-#                 [
-#                     "document_id_s",
-#                     "canonical_url_s",
-#                     "title_txt",
-#                     "excerpt_txt",
-#                     "published_dt",
-#                     "doc_type_s",
-#                     "source_s",
-#                     "has_human_b",
-#                     "has_model_b",
-#                     "codes_present_human_ss",
-#                     "codes_present_model_ss",
-#                     "code_value_human_kv_ss",
-#                     "code_value_human_norm_kv_ss",
-#                     "code_value_model_kv_ss",
-#                     "code_value_model_norm_kv_ss",
-#                 ]
-#             ),
-#         },
-#     )
-#
-#     docs = doc_res.get("docs", []) or []
-#     doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
-#
-#     run_id = _get_run_id(request)
-#     uid = user.get("id") or user.get("user_id") or user.get("sub")
-#
-#     if not run_id:
-#         db = SessionLocal()
-#         try:
-#             run_id = _get_active_topic_run_id(db, project_id=project_id, user_id=str(uid) if uid else None)
-#         finally:
-#             db.close()
-#         _set_run_id(request, run_id)
-#
-#     topics: list[dict] = []
-#     if run_id:
-#         topics_res = await asgi_get(request, f"/documents/{document_id}/topics", params={"run_id": run_id})
-#         topics = topics_res.get("topics", []) or []
-#
-#     codes_view, code_stats = build_codes_view(doc)
-#
-#     back_url = request.query_params.get("back_url") or request.headers.get("referer") or f"/ui/search?core={core}"
-#     return_to = urllib.parse.quote(str(request.url), safe="")
-#
-#     return request.app.state.templates.TemplateResponse(
-#         "doc_detail.html",
-#         {
-#             "request": request,
-#             "user": user,
-#             "project_id": project_id,
-#             "project_name": _get_project_name(request),
-#             "core": core,
-#             "doc": doc,
-#             "run_id": run_id,
-#             "topics": topics,
-#             "in_project": in_project,
-#             "back_url": back_url,
-#             "return_to": return_to,
-#             "codes_view": codes_view,
-#             "code_stats": code_stats,
-#         },
-#     )
 @router.get("/docs/{document_id}", response_class=HTMLResponse)
 async def ui_doc_detail(request: Request, document_id: str, user=Depends(require_paid_user)):
     import os
+    import urllib.parse
 
     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
     if not core:
         core = "hitl_test"
     request.session["core"] = core
 
-    project_id = await _ensure_project_selected(request)
-    if not project_id:
-        return RedirectResponse("/ui/dashboard", status_code=303)
+    # ✅ DO NOT force project selection. Use it if present; otherwise allow All-corpus browsing.
+    project_id = _get_project_id(request)
+    project_name = _get_project_name(request)
 
-    # Check doc is in current project
+    # Check doc is in current project (only if a project is selected)
     in_project = False
-    try:
-        proj_res = await asgi_get(
-            request,
-            f"/projects/{project_id}/documents",
-            params={"limit": 5000, "offset": 0},
-        )
-        ids = set(proj_res.get("document_ids", []) or [])
-        in_project = document_id in ids
-    except Exception:
-        in_project = False
+    if project_id:
+        try:
+            proj_res = await asgi_get(
+                request,
+                f"/projects/{project_id}/documents",
+                params={"limit": 5000, "offset": 0},
+            )
+            ids = set(proj_res.get("document_ids", []) or [])
+            in_project = document_id in ids
+        except Exception:
+            in_project = False
 
     # Fetch document from Solr
     doc_res = await asgi_get(
@@ -1405,7 +1187,7 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
     docs = doc_res.get("docs", []) or []
     doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
 
-    # Resolve run_id per project + user (NO global)
+    # Resolve run_id per USER (NO global)
     uid = user.get("id") or user.get("user_id") or user.get("sub")
     run_id = _get_run_id(request)
 
@@ -1429,7 +1211,28 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
 
     codes_view, code_stats = build_codes_view(doc)
 
-    back_url = request.query_params.get("back_url") or request.headers.get("referer") or f"/ui/search?core={core}"
+    def _normalize_back_url(u: str | None) -> str:
+        """
+        Accepts encoded relative or absolute URLs.
+        Returns a safe relative path + query.
+        """
+        if not u:
+            return ""
+        u = urllib.parse.unquote(u)
+        p = urllib.parse.urlparse(u)
+        if p.scheme and p.netloc:
+            out = p.path or "/ui/search"
+            if p.query:
+                out += "?" + p.query
+            return out
+        if u.startswith("/"):
+            return u
+        return "/ui/search"
+
+    back_url_raw = request.query_params.get("back_url") or request.headers.get("referer")
+    back_url = _normalize_back_url(back_url_raw) or f"/ui/search?core={core}"
+
+    # keep return_to stable
     return_to = request.url.path + f"?core={core}"
 
     return request.app.state.templates.TemplateResponse(
@@ -1437,8 +1240,8 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
         {
             "request": request,
             "user": user,
-            "project_id": project_id,
-            "project_name": _get_project_name(request),
+            "project_id": project_id,      # may be None
+            "project_name": project_name,
             "core": core,
             "doc": doc,
             "run_id": run_id,
@@ -1450,7 +1253,6 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
             "code_stats": code_stats,
         },
     )
-
 
 # ============================================================
 # Topic actions

@@ -381,7 +381,6 @@
 </div>
 
 <hr style="margin:16px 0; opacity:.25;">
-
 <div class="card">
   <h2 style="margin-top:0;">Funding &amp; Contact</h2>
 
@@ -394,12 +393,18 @@
         </a>
       </p>
 
-      <p class="muted" style="margin:0;">
-        <b>Contact:</b> Prof. Mandeep K. Dhami<br>
-        <span class="mono">m.dhami@mdx.ac.uk</span>
+      <p class="muted" style="margin:0 0 8px 0;">
+        <b>Contact:</b><br>
+
+        Prof. Mandeep K. Dhami<br>
+        <span class="mono email" data-user="m.dhami" data-domain="mdx.ac.uk"></span>
+        <br><br>
+
+        Prof. David Windridge<br>
+        <span class="mono email" data-user="d.windridge" data-domain="mdx.ac.uk"></span>
       </p>
 
-      <!-- Funding logos (bottom, compliance-friendly) -->
+      <!-- Funding logos -->
       <div class="row" style="gap:30px; align-items:center; justify-content:flex-start; margin-top:14px;">
         <img src="/static/logos/ukri_epsrc.png" alt="UKRI EPSRC"
              style="height:72px; max-width:280px; object-fit:contain; padding:10px; border:1px solid var(--border); border-radius:12px; background:#fff;">
@@ -420,5 +425,21 @@
     </div>
   </div>
 </div>
+
+<!-- Email Obfuscation Script -->
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const emails = document.querySelectorAll(".email");
+  emails.forEach(function (el) {
+    const user = el.getAttribute("data-user");
+    const domain = el.getAttribute("data-domain");
+    if (user && domain) {
+      const email = user + "@" + domain;
+      el.textContent = email;
+      el.innerHTML = '<a href="mailto:' + email + '">' + email + '</a>';
+    }
+  });
+});
+</script>
 
 {% endblock %}
