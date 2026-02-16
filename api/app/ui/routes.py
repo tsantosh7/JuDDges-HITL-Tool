@@ -19,6 +19,9 @@ from app.db import SessionLocal
 
 from sqlalchemy import select, text, func
 from app.models import TopicRun, DocumentTopic
+from app.models import ProjectDocument  # ensure imported
+
+from fastapi import Request
 
 
 logger = logging.getLogger(__name__)
@@ -62,68 +65,95 @@ def _flatten_params(p: dict | None) -> list[tuple[str, str]]:
     return out
 
 
+@router.get("/index", response_class=HTMLResponse)
+async def ui_index(request: Request):
+    return request.app.state.templates.TemplateResponse(
+        "index.html",
+        {"request": request, "error": None},
+    )
+
+
+
 async def asgi_get(request: Request, path: str, params: dict | None = None):
     """
-    Internal ASGI call helper (UI -> API).
+    Internal ASGI call helper (UI -> API), pooled.
 
+    - Reuses app.state.asgi_client (fast)
     - Forwards cookies (fixes 401 Not authenticated)
     - Properly encodes list-valued query params
-    - Raises a helpful error including response body snippet
+    - Raises helpful error including response body snippet
     """
-    transport = httpx.ASGITransport(app=request.app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
-        flat = _flatten_params(params)
-        headers = _forward_cookie_headers(request)
-        r = await client.get(path, params=flat, headers=headers)
+    client: httpx.AsyncClient = request.app.state.asgi_client
+    flat = _flatten_params(params)
+    headers = _forward_cookie_headers(request)
+
+    r = await client.get(path, params=flat, headers=headers)
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        snippet = ""
         try:
-            r.raise_for_status()
-        except httpx.HTTPStatusError as e:
+            snippet = (r.text or "")[:2000]
+        except Exception:
             snippet = ""
-            try:
-                snippet = (r.text or "")[:2000]
-            except Exception:
-                snippet = ""
-            raise httpx.HTTPStatusError(
-                message=f"ASGI GET failed: {r.status_code} {path} params={flat} body={snippet}",
-                request=e.request,
-                response=e.response,
-            ) from e
+        raise httpx.HTTPStatusError(
+            message=f"ASGI GET failed: {r.status_code} {path} params={flat} body={snippet}",
+            request=e.request,
+            response=e.response,
+        ) from e
 
-        # allow non-json responses if needed
-        ct = (r.headers.get("content-type") or "").lower()
-        if ct.startswith("application/json"):
-            return r.json()
-        return {"text": r.text}
+    ct = (r.headers.get("content-type") or "").lower()
+    if ct.startswith("application/json"):
+        return r.json()
+    return {"text": r.text}
 
 
-async def asgi_post_json(request: Request, path: str, payload: dict):
+async def asgi_post_json(request: Request, path: str, payload: dict, *, timeout_s: float = 60.0):
     """
-    Internal ASGI POST helper that forwards cookies.
+    Internal ASGI POST helper that forwards cookies, pooled.
     """
-    transport = httpx.ASGITransport(app=request.app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
-        headers = _forward_cookie_headers(request)
-        r = await client.post(path, json=payload, timeout=60, headers=headers)
+    client: httpx.AsyncClient = request.app.state.asgi_client
+    headers = _forward_cookie_headers(request)
+
+    r = await client.post(path, json=payload, headers=headers, timeout=timeout_s)
 
     if r.status_code == 422:
         logger.error("422 from %s payload=%s resp=%s", path, payload, r.text)
 
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        snippet = (r.text or "")[:2000]
+        raise httpx.HTTPStatusError(
+            message=f"ASGI POST failed: {r.status_code} {path} body={snippet}",
+            request=e.request,
+            response=e.response,
+        ) from e
+
     return r.json() if r.content else None
 
 
-async def asgi_patch(request: Request, path: str):
+async def asgi_patch(request: Request, path: str, *, timeout_s: float = 60.0):
     """
-    Internal ASGI PATCH helper that forwards cookies.
+    Internal ASGI PATCH helper that forwards cookies, pooled.
     """
-    transport = httpx.ASGITransport(app=request.app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://app") as client:
-        headers = _forward_cookie_headers(request)
-        r = await client.patch(path, headers=headers)
+    client: httpx.AsyncClient = request.app.state.asgi_client
+    headers = _forward_cookie_headers(request)
+
+    r = await client.patch(path, headers=headers, timeout=timeout_s)
+    try:
         r.raise_for_status()
-        if (r.headers.get("content-type") or "").startswith("application/json"):
-            return r.json()
-        return {"ok": True}
+    except httpx.HTTPStatusError as e:
+        snippet = (r.text or "")[:2000]
+        raise httpx.HTTPStatusError(
+            message=f"ASGI PATCH failed: {r.status_code} {path} body={snippet}",
+            request=e.request,
+            response=e.response,
+        ) from e
+
+    if (r.headers.get("content-type") or "").startswith("application/json"):
+        return r.json()
+    return {"ok": True}
 
 
 # ============================================================
@@ -591,24 +621,44 @@ async def ui_search(
         _set_run_id(request, run_id)
 
     # ✅ Topic filter (user-specific): use Postgres DocumentTopic -> restrict Solr by doc_id list
+    too_many_topic_docs = False
+    topic_doc_cap = None
+
     if (topic or "").strip() and run_id:
         topic_val = (topic or "").strip()
+
+        # caps: allow bigger caps in project scope
+        if scope == "project" and project_id:
+            topic_doc_cap = 2000
+        else:
+            topic_doc_cap = 800
+
         db = SessionLocal()
         try:
-            doc_ids = (
-                db.execute(
-                    select(DocumentTopic.document_id)
-                    .where(DocumentTopic.run_id == UUID(run_id))
-                    .where(DocumentTopic.status == "active")
-                    .where((DocumentTopic.topic_label == topic_val) | (DocumentTopic.topic_key == topic_val))
-                )
-                .scalars()
-                .all()
+            q_docids = (
+                select(DocumentTopic.document_id)
+                .where(DocumentTopic.run_id == UUID(run_id))
+                .where(DocumentTopic.status == "active")
+                .where((DocumentTopic.topic_label == topic_val) | (DocumentTopic.topic_key == topic_val))
             )
+
+            # ✅ If project scope, restrict doc_ids to the current project at SQL level
+            if scope == "project" and project_id:
+                q_docids = (
+                    q_docids.join(ProjectDocument, ProjectDocument.document_id == DocumentTopic.document_id)
+                    .where(ProjectDocument.project_id == UUID(project_id))
+                )
+
+            doc_ids = db.execute(q_docids).scalars().all()
         finally:
             db.close()
 
         doc_ids = [d for d in doc_ids if d]
+
+        if topic_doc_cap and len(doc_ids) > topic_doc_cap:
+            too_many_topic_docs = True
+            doc_ids = doc_ids[:topic_doc_cap]
+
         if not doc_ids:
             result = {"ok": True, "docs": [], "numFound": 0, "start": start_i, "facets": {}}
             return request.app.state.templates.TemplateResponse(
@@ -634,16 +684,19 @@ async def ui_search(
                     "back_url_enc": urllib.parse.quote(str(request.url), safe=""),
                     "user_topics_facet": [],
                     "run_id": run_id,
+                    "too_many_topic_docs": False,
+                    "topic_doc_cap": topic_doc_cap,
                 },
             )
 
-        CHUNK = 200
+        CHUNK = 500
         id_fqs = []
         for i in range(0, len(doc_ids), CHUNK):
-            chunk = doc_ids[i : i + CHUNK]
+            chunk = doc_ids[i: i + CHUNK]
             inner = " ".join([f'"{_solr_escape_phrase(x)}"' for x in chunk])
             id_fqs.append(f"document_id_s:({inner})")
         fq.append("(" + " OR ".join(id_fqs) + ")")
+
 
     params = {
         "q": effective_q,
@@ -652,7 +705,8 @@ async def ui_search(
         "start": start_i,
         "fq": fq,
         "fl": fl,
-        "include_facets": "1",
+        # "include_facets": "1",
+        "include_facets": "1" if start_i == 0 else "0",
     }
 
     if scope == "project":
@@ -750,6 +804,9 @@ async def ui_search(
             "back_url_enc": back_url_enc,
             "user_topics_facet": user_topics_facet,
             "run_id": run_id,
+            "too_many_topic_docs": too_many_topic_docs,
+            "topic_doc_cap": topic_doc_cap,
+
         },
     )
 
@@ -760,9 +817,10 @@ async def ui_search(
 # ============================================================
 @router.get("/add_to_project", response_class=HTMLResponse)
 async def ui_add_to_project_page(request: Request, user=Depends(require_paid_user)):
-    project_id = await _ensure_project_selected(request)
+    # project_id = await _ensure_project_selected(request)
+    project_id = _get_project_id(request)
     if not project_id:
-        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+       return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
 
     return request.app.state.templates.TemplateResponse(
         "add_to_project.html",
@@ -782,7 +840,8 @@ async def ui_add_to_project_post(
     document_ids_text: str = Form(""),
     user=Depends(require_role("admin", "reviewer")),
 ):
-    project_id = await _ensure_project_selected(request)
+    # project_id = await _ensure_project_selected(request)
+    project_id = _get_project_id(request)
     if not project_id:
         return RedirectResponse("/ui/dashboard", status_code=303)
 
@@ -819,15 +878,57 @@ async def ui_add_to_project_post(
     )
 
 
+# @router.post("/projects/add_one")
+# async def ui_add_one_from_search(
+#     request: Request,
+#     document_id: str = Form(...),
+#     next: str | None = Form(None),
+#     # user=Depends(require_role("admin", "reviewer")),
+#     user=Depends(require_paid_user)
+# ):
+#     # project_id = await _ensure_project_selected(request)
+#     project_id = _get_project_id(request)
+#     if not project_id:
+#         return RedirectResponse("/ui/dashboard", status_code=303)
+#
+#     await asgi_post_json(
+#         request,
+#         f"/projects/{project_id}/documents/add",
+#         {"document_ids": [document_id]},
+#     )
+#
+#     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
+#     if not core:
+#         core = "hitl_test"
+#     request.session["core"] = core
+#
+#     if next:
+#         try:
+#             target = urllib.parse.unquote(next)
+#             if target.startswith("/"):
+#                 return RedirectResponse(target, status_code=303)
+#             u = urllib.parse.urlparse(target)
+#             if u.scheme in ("http", "https") and (u.netloc == "" or u.netloc == "app" or u.netloc == "localhost:8000"):
+#                 return RedirectResponse(target, status_code=303)
+#         except Exception:
+#             pass
+#
+#     ref = request.headers.get("referer")
+#     if ref:
+#         return RedirectResponse(ref, status_code=303)
+#
+#     return RedirectResponse(f"/ui/search?core={core}", status_code=303)
 @router.post("/projects/add_one")
 async def ui_add_one_from_search(
     request: Request,
     document_id: str = Form(...),
     next: str | None = Form(None),
-    # user=Depends(require_role("admin", "reviewer")),
-    user=Depends(require_paid_user)
+    user=Depends(require_paid_user),
 ):
-    project_id = await _ensure_project_selected(request)
+    import os
+    import urllib.parse
+
+    project_id = _get_project_id(request)
     if not project_id:
         return RedirectResponse("/ui/dashboard", status_code=303)
 
@@ -842,22 +943,26 @@ async def ui_add_one_from_search(
         core = "hitl_test"
     request.session["core"] = core
 
+    # ✅ Prefer returning to the doc detail (shows immediate DB membership)
+    target_doc = f"/ui/docs/{document_id}?core={core}&msg=added"
+
     if next:
         try:
             target = urllib.parse.unquote(next)
             if target.startswith("/"):
+                # attach msg if it's a doc page
+                if target.startswith(f"/ui/docs/{document_id}"):
+                    sep = "&" if "?" in target else "?"
+                    target = f"{target}{sep}msg=added"
                 return RedirectResponse(target, status_code=303)
+
             u = urllib.parse.urlparse(target)
-            if u.scheme in ("http", "https") and (u.netloc == "" or u.netloc == "app" or u.netloc == "localhost:8000"):
+            if u.scheme in ("http", "https") and (u.netloc == "" or u.netloc in ("app", "localhost:8000")):
                 return RedirectResponse(target, status_code=303)
         except Exception:
             pass
 
-    ref = request.headers.get("referer")
-    if ref:
-        return RedirectResponse(ref, status_code=303)
-
-    return RedirectResponse(f"/ui/search?core={core}", status_code=303)
+    return RedirectResponse(target_doc, status_code=303)
 
 
 # ============================================================
@@ -1139,20 +1244,6 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
     project_id = _get_project_id(request)
     project_name = _get_project_name(request)
 
-    # Check doc is in current project (only if a project is selected)
-    in_project = False
-    if project_id:
-        try:
-            proj_res = await asgi_get(
-                request,
-                f"/projects/{project_id}/documents",
-                params={"limit": 5000, "offset": 0},
-            )
-            ids = set(proj_res.get("document_ids", []) or [])
-            in_project = document_id in ids
-        except Exception:
-            in_project = False
-
     # Fetch document from Solr
     doc_res = await asgi_get(
         request,
@@ -1180,12 +1271,32 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
                     "code_value_human_norm_kv_ss",
                     "code_value_model_kv_ss",
                     "code_value_model_norm_kv_ss",
+                    "project_ids_ss",
                 ]
             ),
         },
     )
     docs = doc_res.get("docs", []) or []
     doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
+
+    # # ✅ Fast membership check using Solr field on this doc
+    # in_project = False
+    # if project_id:
+    #     pids = doc.get("project_ids_ss") or []
+    #     if isinstance(pids, str):
+    #         pids = [pids]
+    #     in_project = str(project_id) in set(str(x) for x in pids if x)
+
+    # ✅ Fast membership check using Postgres (authoritative + instant)
+    # ✅ Membership check via Postgres (authoritative + immediate)
+    in_project = False
+    if project_id:
+        db = SessionLocal()
+        try:
+            row = db.get(ProjectDocument, {"project_id": UUID(str(project_id)), "document_id": document_id})
+            in_project = bool(row)
+        finally:
+            db.close()
 
     # Resolve run_id per USER (NO global)
     uid = user.get("id") or user.get("user_id") or user.get("sub")

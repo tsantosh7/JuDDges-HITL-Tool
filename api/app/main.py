@@ -16,7 +16,10 @@ import urllib.parse
 
 from datetime import datetime, date, timezone
 from typing import Any, Dict, List, Optional, Iterable, Tuple
+import httpx
 
+from fastapi.responses import HTMLResponse
+from fastapi import Request
 import requests
 from requests.exceptions import RequestException
 from requests.adapters import HTTPAdapter
@@ -128,13 +131,23 @@ HYPOTHESIS_PUBLIC_GROUP_ID = "__world__"
 HYPOTHESIS_EXCLUDE_PUBLIC = os.getenv("HYPOTHESIS_EXCLUDE_PUBLIC", "true").lower() == "true"
 
 
-
+# import httpx
 
 
 @app.on_event("startup")
-def on_startup():
+async def app_startup():
+    """
+    Unified startup:
+    - DB init + seeding
+    - Snapshot directory
+    - External pooled HTTP client (Solr, Hypothesis)
+    - Internal ASGI pooled client (UI -> API)
+    """
+
+    # --- DB init / seed ---
     init()
     os.makedirs(HYPOTHESIS_SNAPSHOT_DIR, exist_ok=True)
+
     db = SessionLocal()
     try:
         seed_v1_codes(db)
@@ -142,6 +155,39 @@ def on_startup():
     finally:
         db.close()
 
+    # --- External HTTP client (Solr, Hypothesis) ---
+    app.state.http = httpx.AsyncClient(
+        timeout=httpx.Timeout(30.0),
+        limits=httpx.Limits(
+            max_connections=100,
+            max_keepalive_connections=20,
+        ),
+        headers={"User-Agent": "hitl-app/1.0"},
+    )
+
+    # --- Internal ASGI client (UI -> API calls) ---
+    transport = httpx.ASGITransport(app=app)
+    app.state.asgi_client = httpx.AsyncClient(
+        transport=transport,
+        base_url="http://app",
+        timeout=httpx.Timeout(60.0),
+        limits=httpx.Limits(
+            max_connections=200,
+            max_keepalive_connections=50,
+        ),
+    )
+
+
+@app.on_event("shutdown")
+async def app_shutdown():
+    """
+    Clean shutdown of pooled clients.
+    """
+
+    for attr in ("http", "asgi_client"):
+        client = getattr(app.state, attr, None)
+        if client:
+            await client.aclose()
 
 
 @app.get("/health")
@@ -689,28 +735,14 @@ def solr_add_docs(
         raise HTTPException(status_code=500, detail=f"Solr add failed: {r.status_code} {r.text[:800]}")
 
 
-# def solr_atomic_update(core: str, atomic_docs: List[dict], commit_within_ms: int = 5000) -> None:
-#     r = requests.post(
-#         f"{solr_core_url(core)}/update",
-#         params={"commitWithin": str(int(commit_within_ms))},
-#         json=atomic_docs,
-#         timeout=120,
-#     )
-#     if r.status_code >= 300:
-#         raise HTTPException(status_code=500, detail=f"Solr atomic update failed: {r.status_code} {r.text[:800]}")
-
-def solr_atomic_update(core: str, atomic_docs: List[dict], commit_within_ms: int = 5000) -> None:
+def solr_atomic_update(core: str, atomic_docs: List[dict], commit_within_ms: int | None = 30000) -> None:
     """
-    Atomic update to Solr.
+    Atomic update to Solr (pooled).
 
-    Improvements:
-    - Validates payload shape (helps catch silent "nothing updated" bugs).
-    - Adds explicit Content-Type header (some proxies/solr configs are picky).
-    - Logs a small debug summary (counts + first/last doc ids) to diagnose issues.
-    - Surfaces Solr error bodies cleanly.
-
-    IMPORTANT:
-    - Assumes Solr uniqueKey is `document_id_s` (your code uses that everywhere).
+    - Uses pooled requests.Session via _get_solr_session() (big speed win)
+    - Validates payload shape
+    - Optional commitWithin (defaults 30s; set None to omit)
+    - Surfaces Solr error bodies cleanly
     """
     if not atomic_docs:
         return
@@ -734,35 +766,40 @@ def solr_atomic_update(core: str, atomic_docs: List[dict], commit_within_ms: int
             detail=f"Solr atomic update payload invalid: missing/invalid document_id_s at indexes {missing_ids[:50]}",
         )
 
-    # Small debug helps massively when updates "succeed" but you see no changes
-    try:
-        logger.debug(
-            "Solr atomic update",
-            extra={
-                "core": core,
-                "count": len(atomic_docs),
-                "commitWithin": int(commit_within_ms),
-                "first_doc_id": doc_ids[0] if doc_ids else None,
-                "last_doc_id": doc_ids[-1] if doc_ids else None,
-            },
-        )
-    except Exception:
-        pass
-
     url = f"{solr_core_url(core)}/update"
+    params = {}
+    if commit_within_ms is not None:
+        params["commitWithin"] = str(int(commit_within_ms))
+
+    # Use the same pooled session as solr_select()
+    sess = _get_solr_session()
+
     try:
-        r = requests.post(
+        # (connect, read) timeouts
+        timeout = (3.0, 30.0)
+
+        r = sess.post(
             url,
-            params={"commitWithin": str(int(commit_within_ms))},
+            params=params,
             json=atomic_docs,
             headers={"Content-Type": "application/json"},
-            timeout=120,
+            timeout=timeout,
         )
+
         if r.status_code >= 300:
             raise HTTPException(
                 status_code=500,
-                detail=f"Solr atomic update failed: {r.status_code} {r.text[:2000]}",
+                detail={
+                    "error": "Solr atomic update failed",
+                    "core": core,
+                    "status": r.status_code,
+                    "body": (r.text or "")[:2000],
+                    "count": len(atomic_docs),
+                    "first_doc_id": doc_ids[0] if doc_ids else None,
+                    "last_doc_id": doc_ids[-1] if doc_ids else None,
+                },
             )
+
     except HTTPException:
         raise
     except Exception as e:
@@ -770,6 +807,78 @@ def solr_atomic_update(core: str, atomic_docs: List[dict], commit_within_ms: int
             status_code=500,
             detail=f"Solr atomic update error: {type(e).__name__}: {str(e)}",
         ) from e
+
+# def solr_atomic_update(core: str, atomic_docs: List[dict], commit_within_ms: int = 5000) -> None:
+#     """
+#     Atomic update to Solr.
+#
+#     Improvements:
+#     - Validates payload shape (helps catch silent "nothing updated" bugs).
+#     - Adds explicit Content-Type header (some proxies/solr configs are picky).
+#     - Logs a small debug summary (counts + first/last doc ids) to diagnose issues.
+#     - Surfaces Solr error bodies cleanly.
+#
+#     IMPORTANT:
+#     - Assumes Solr uniqueKey is `document_id_s` (your code uses that everywhere).
+#     """
+#     if not atomic_docs:
+#         return
+#
+#     # Validate payload: every doc must include the unique key
+#     missing_ids: list[int] = []
+#     doc_ids: list[str] = []
+#     for i, d in enumerate(atomic_docs):
+#         if not isinstance(d, dict):
+#             missing_ids.append(i)
+#             continue
+#         did = d.get("document_id_s")
+#         if not did or not str(did).strip():
+#             missing_ids.append(i)
+#         else:
+#             doc_ids.append(str(did))
+#
+#     if missing_ids:
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"Solr atomic update payload invalid: missing/invalid document_id_s at indexes {missing_ids[:50]}",
+#         )
+#
+#     # Small debug helps massively when updates "succeed" but you see no changes
+#     try:
+#         logger.debug(
+#             "Solr atomic update",
+#             extra={
+#                 "core": core,
+#                 "count": len(atomic_docs),
+#                 "commitWithin": int(commit_within_ms),
+#                 "first_doc_id": doc_ids[0] if doc_ids else None,
+#                 "last_doc_id": doc_ids[-1] if doc_ids else None,
+#             },
+#         )
+#     except Exception:
+#         pass
+#
+#     url = f"{solr_core_url(core)}/update"
+#     try:
+#         r = requests.post(
+#             url,
+#             params={"commitWithin": str(int(commit_within_ms))},
+#             json=atomic_docs,
+#             headers={"Content-Type": "application/json"},
+#             timeout=120,
+#         )
+#         if r.status_code >= 300:
+#             raise HTTPException(
+#                 status_code=500,
+#                 detail=f"Solr atomic update failed: {r.status_code} {r.text[:2000]}",
+#             )
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"Solr atomic update error: {type(e).__name__}: {str(e)}",
+#         ) from e
 
 
 def solr_update_codes_only(core: str, doc_codes: Dict[str, Dict[str, set[str]]]) -> int:
@@ -791,7 +900,8 @@ def solr_update_codes_only(core: str, doc_codes: Dict[str, Dict[str, set[str]]])
 
     updated = 0
     for batch in chunked(atomic_docs, 500):
-        solr_atomic_update(core, batch, commit_within_ms=5000)
+        solr_atomic_update(core, batch, commit_within_ms=30000)
+
         updated += len(batch)
 
     return updated
@@ -808,7 +918,8 @@ def solr_add_project_membership(core: str, project_id: str, document_ids: list[s
         })
     updated = 0
     for batch in chunked(atomic_docs, 500):
-        solr_atomic_update(core, batch, commit_within_ms=5000)
+        solr_atomic_update(core, batch, commit_within_ms=30000)
+
         updated += len(batch)
     return updated
 
@@ -826,7 +937,8 @@ def solr_set_project_membership(core: str, doc_to_projects: dict[str, set[str]])
 
     updated = 0
     for batch in chunked(atomic_docs, 500):
-        solr_atomic_update(core, batch, commit_within_ms=5000)
+        solr_atomic_update(core, batch, commit_within_ms=30000)
+
         updated += len(batch)
     return updated
 
@@ -1142,7 +1254,8 @@ def solr_update_review_status(core: str, updates: list[dict]) -> int:
     # chunk updates
     updated = 0
     for batch in chunked(atomic_docs, 200):
-        solr_atomic_update(core, batch, commit_within_ms=5000)
+        solr_atomic_update(core, batch, commit_within_ms=30000)
+
         updated += len(batch)
     return updated
 
@@ -1250,7 +1363,8 @@ def solr_update_topics_for_docs(
 
     updated = 0
     for batch in chunked(atomic_docs, 500):
-        solr_atomic_update(core, batch, commit_within_ms=5000)
+        solr_atomic_update(core, batch, commit_within_ms=30000)
+
         updated += len(batch)
 
     return updated
@@ -1410,6 +1524,19 @@ class ProjectCreateRequest(BaseModel):
 
 class ProjectAddDocsRequest(BaseModel):
     document_ids: list[str] = Field(..., min_length=1)
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def index(request: Request):
+    # If you want to always show landing page:
+    return request.app.state.templates.TemplateResponse(
+        "index.html",
+        {"request": request, "error": None},
+    )
+
+    # OR if you want to redirect to login instead:
+    # return RedirectResponse("/auth/login", status_code=303)
+
 
 
 # ------------------------------------------------------------------------------
@@ -2012,7 +2139,8 @@ def solr_update_flags_for_docs(
 
     updated = 0
     for batch in chunked(atomic_docs, 500):
-        solr_atomic_update(core, batch, commit_within_ms=5000)
+        solr_atomic_update(core, batch, commit_within_ms=30000)
+
         updated += len(batch)
 
     return updated
@@ -2417,7 +2545,8 @@ def solr_recompute_project_membership(
 
         updated = 0
         for batch in chunked(atomic_docs, 500):
-            solr_atomic_update(core, batch, commit_within_ms=5000)
+            solr_atomic_update(core, batch, commit_within_ms=30000)
+
             updated += len(batch)
 
         return {"ok": True, "core": core, "project_id": str(project_id), "docs_in_project": len(doc_ids), "solr_updated": updated}
@@ -3377,15 +3506,24 @@ def get_project(project_id: UUID, request: Request):
         db.close()
 
 
+from fastapi import BackgroundTasks
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 @app.post("/projects/{project_id}/documents/add")
 def add_documents_to_project(
     project_id: UUID,
     request: Request,
     payload: ProjectAddDocsRequest,
+    background_tasks: BackgroundTasks,   # ✅ ADD
     core: str = "hitl_test",
 ):
     uid = current_user_id(request)
+
+    doc_ids = [d.strip() for d in (payload.document_ids or []) if d and str(d).strip()]
+    seen = set()
+    doc_ids = [x for x in doc_ids if not (x in seen or seen.add(x))]
+    if not doc_ids:
+        raise HTTPException(400, "No document_ids provided")
 
     db = SessionLocal()
     try:
@@ -3396,25 +3534,73 @@ def add_documents_to_project(
             raise HTTPException(404, "project not found")
 
         existing = set(
-            db.execute(select(Document.document_id).where(Document.document_id.in_(payload.document_ids))).scalars().all()
+            db.execute(select(Document.document_id).where(Document.document_id.in_(doc_ids))).scalars().all()
         )
-        missing = [d for d in payload.document_ids if d not in existing]
+        missing = [d for d in doc_ids if d not in existing]
         if missing:
             raise HTTPException(400, f"{len(missing)} document_ids not found")
 
-        added = 0
-        for did in payload.document_ids:
-            row = db.get(ProjectDocument, {"project_id": project_id, "document_id": did})
-            if row:
-                continue
-            db.add(ProjectDocument(project_id=project_id, document_id=did))
-            added += 1
+        stmt = (
+            pg_insert(ProjectDocument)
+            .values([{"project_id": project_id, "document_id": did} for did in doc_ids])
+            .on_conflict_do_nothing(index_elements=["project_id", "document_id"])
+        )
+        res = db.execute(stmt)
         db.commit()
 
-        solr_updated = solr_add_project_membership(core, str(project_id), payload.document_ids)
-        return {"ok": True, "project_id": str(project_id), "docs_added": added, "solr_docs_updated": solr_updated}
+        docs_added = int(res.rowcount or 0)
+
+        # ✅ Run Solr update asynchronously so UI returns immediately
+        background_tasks.add_task(solr_add_project_membership, core, str(project_id), doc_ids)
+
+        return {
+            "ok": True,
+            "project_id": str(project_id),
+            "docs_added": docs_added,
+            "solr_docs_updated": 0,             # will be updated async
+            "solr_update_queued": True,         # ✅ tell UI it’s queued
+        }
     finally:
         db.close()
+
+
+# @app.post("/projects/{project_id}/documents/add")
+# def add_documents_to_project(
+#     project_id: UUID,
+#     request: Request,
+#     payload: ProjectAddDocsRequest,
+#     core: str = "hitl_test",
+# ):
+#     uid = current_user_id(request)
+#
+#     db = SessionLocal()
+#     try:
+#         assert_project_member(db, project_id, uid)
+#
+#         p = db.get(Project, project_id)
+#         if not p:
+#             raise HTTPException(404, "project not found")
+#
+#         existing = set(
+#             db.execute(select(Document.document_id).where(Document.document_id.in_(payload.document_ids))).scalars().all()
+#         )
+#         missing = [d for d in payload.document_ids if d not in existing]
+#         if missing:
+#             raise HTTPException(400, f"{len(missing)} document_ids not found")
+#
+#         added = 0
+#         for did in payload.document_ids:
+#             row = db.get(ProjectDocument, {"project_id": project_id, "document_id": did})
+#             if row:
+#                 continue
+#             db.add(ProjectDocument(project_id=project_id, document_id=did))
+#             added += 1
+#         db.commit()
+#
+#         solr_updated = solr_add_project_membership(core, str(project_id), payload.document_ids)
+#         return {"ok": True, "project_id": str(project_id), "docs_added": added, "solr_docs_updated": solr_updated}
+#     finally:
+#         db.close()
 
 
 
@@ -3462,6 +3648,7 @@ def search(
     group_id: Optional[str] = None,
     # ✅ CRITICAL: accept fl either as "a,b,c" OR as repeated fl=a&fl=b
     fl: Optional[Union[str, List[str]]] = Query(None),
+    include_facets: bool = True,
 ):
     """
     Solr-backed search endpoint.
@@ -3528,25 +3715,47 @@ def search(
     fl_norm = normalize_fl(fl)
     fl_out = fl_norm if fl_norm else ",".join(default_fl_list)
 
+    # params: Dict[str, Any] = {
+    #     "q": q_clean,
+    #     "rows": rows_i,
+    #     "start": start_i,
+    #     "wt": "json",
+    #     "fl": fl_out,  # ✅ this is the critical part
+    #     "facet": "true",
+    #     "facet.mincount": 1,
+    #     "facet.limit": 50,
+    #     "facet.field": [
+    #         "doc_type_s",
+    #         "source_s",
+    #         # "judges_ss",
+    #         "has_human_b",
+    #         "codes_all_ss",
+    #         # "appeal_outcome_s",
+    #         "topics_ss",
+    #     ],
+    # }
     params: Dict[str, Any] = {
         "q": q_clean,
         "rows": rows_i,
         "start": start_i,
         "wt": "json",
-        "fl": fl_out,  # ✅ this is the critical part
-        "facet": "true",
-        "facet.mincount": 1,
-        "facet.limit": 50,
-        "facet.field": [
-            "doc_type_s",
-            "source_s",
-            # "judges_ss",
-            "has_human_b",
-            "codes_all_ss",
-            # "appeal_outcome_s",
-            "topics_ss",
-        ],
+        "fl": fl_out,
     }
+    if include_facets:
+        params.update(
+            {
+                "facet": "true",
+                "facet.mincount": 1,
+                "facet.limit": 20,
+                "facet.field": [
+                    "doc_type_s",
+                    "source_s",
+                    "has_human_b",
+                    "codes_all_ss",
+                    # ❌ remove topics_ss (you no longer use Solr topics in UI)
+                ],
+            }
+        )
 
     # -----------------------------
     # Filters (fq + project scope)
@@ -4702,7 +4911,8 @@ def _propagate_topic(
 #                 "topic_kv_ss": {"set": []},
 #             })
 #         for batch in chunked(clears, 500):
-#             solr_atomic_update(core, batch, commit_within_ms=5000)
+#             solr_atomic_update(core, batch, commit_within_ms=30000)
+
 #             updated += len(batch)
 #
 #     return updated
@@ -4763,7 +4973,8 @@ def _push_topics_for_docs(db, *, core: str, run_id: UUID, document_ids: List[str
                 "topic_kv_ss": {"set": []},
             })
         for batch in chunked(clears, 500):
-            solr_atomic_update(core, batch, commit_within_ms=5000)
+            solr_atomic_update(core, batch, commit_within_ms=30000)
+
             updated += len(batch)
 
     return updated

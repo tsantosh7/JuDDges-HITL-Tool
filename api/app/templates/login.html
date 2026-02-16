@@ -1,3 +1,40 @@
+{#{% extends "base.html" %}#}
+{#{% block content %}#}
+{##}
+{#<h1>Login</h1>#}
+{##}
+{#<div class="card" style="max-width: 420px; margin: 0 auto;">#}
+{##}
+{#  {% if error %}#}
+{#    <div class="alert">{{ error }}</div>#}
+{#  {% endif %}#}
+{##}
+{#  <form method="post" action="/auth/login">#}
+{#    <div style="margin-bottom:12px;">#}
+{#      <label class="muted">Username or Email</label>#}
+{#      <input type="text" name="username" autocomplete="username" required style="width:100%;">#}
+{#    </div>#}
+{##}
+{#    <div style="margin-bottom:12px;">#}
+{#      <label class="muted">Password</label>#}
+{#      <input type="password" name="password" autocomplete="current-password" required style="width:100%;">#}
+{#    </div>#}
+{##}
+{#    <button type="submit" class="btnlink" style="width:100%;">Login</button>#}
+{#  </form>#}
+{##}
+{#  <hr style="margin:16px 0; border:none; border-top:1px solid #eee;">#}
+{##}
+{#  <div style="text-align:center;">#}
+{#    <span class="muted">Don’t have an account?</span><br>#}
+{#    <a href="/auth/register" class="btnlink">Create an account</a>#}
+{#      <a href="/" class="btnlink">Home</a>#}
+{#  </div>#}
+{##}
+{#</div>#}
+{##}
+{#{% endblock %}#}
+
 {% extends "base.html" %}
 {% block content %}
 
@@ -15,9 +52,16 @@
       <input type="text" name="username" autocomplete="username" required style="width:100%;">
     </div>
 
-    <div style="margin-bottom:12px;">
+    <div style="margin-bottom:8px;">
       <label class="muted">Password</label>
       <input type="password" name="password" autocomplete="current-password" required style="width:100%;">
+    </div>
+
+    <!-- Forgot password link -->
+    <div style="display:flex; justify-content:flex-end; margin: 0 0 12px 0;">
+      <a href="/auth/forgot" class="muted" style="text-decoration:none;">
+        Forgot password?
+      </a>
     </div>
 
     <button type="submit" class="btnlink" style="width:100%;">Login</button>
@@ -25,9 +69,16 @@
 
   <hr style="margin:16px 0; border:none; border-top:1px solid #eee;">
 
+  <!-- Billing / Upgrade shortcut (optional but recommended) -->
+  <div style="text-align:center; margin-bottom:10px;">
+    <span class="muted">Need access to paid features?</span><br>
+    <a href="/auth/billing" class="btnlink">Upgrade / Billing</a>
+  </div>
+
   <div style="text-align:center;">
     <span class="muted">Don’t have an account?</span><br>
     <a href="/auth/register" class="btnlink">Create an account</a>
+    <a href="/" class="btnlink">Home</a>
   </div>
 
 </div>

@@ -265,6 +265,14 @@
 {#<form method="get" class="card" style="padding:14px;">#}
 <form id="searchForm" method="get" class="card" style="padding:14px;">
 
+    {% if too_many_topic_docs %}
+      <div class="alert">
+        This topic matches many documents. For speed, filtering is limited to the first {{ topic_doc_cap }} matches.
+        Add keywords or switch to Project scope to narrow it down.
+      </div>
+    {% endif %}
+
+
   {# keep core sticky #}
   <input type="hidden" name="core" value="{{ core }}">
 

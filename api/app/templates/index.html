@@ -1,0 +1,390 @@
+{# templates/index.html #}
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  /* ----- page rhythm ----- */
+  .landing { display: grid; gap: 14px; }
+  .card { overflow: hidden; } /* prevents odd overflow gaps */
+  .muted.small { font-size: 12px; }
+  .section-title { margin: 0 0 8px 0; }
+
+  /* ----- hero layout (grid, not flex) ----- */
+  .hero {
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--bg, transparent);
+  }
+  .hero-grid{
+    display:grid;
+    grid-template-columns: 1.6fr 0.9fr;
+    gap: 14px;
+    align-items: start;
+  }
+
+  /* collapse to 1 col on smaller screens */
+  @media (max-width: 960px){
+    .hero-grid{ grid-template-columns: 1fr; }
+  }
+
+  /* ----- logo strip: uses grid so no weird leftover space ----- */
+  .logo-grid{
+    display:grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    align-items:center;
+  }
+  @media (max-width: 720px){
+    .logo-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 520px){
+    .logo-grid{ grid-template-columns: 1fr; }
+  }
+
+  .logo-tile{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border:1px solid var(--border);
+    border-radius:12px;
+    background:#fff;
+    padding:10px;
+    height: 86px; /* consistent tiles */
+  }
+  .logo-tile img{
+    max-height: 66px;
+    max-width: 100%;
+    object-fit: contain;
+  }
+
+  /* ----- general two-column sections without empty gaps ----- */
+  .two-col{
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    align-items: stretch;
+  }
+  @media (max-width: 960px){
+    .two-col{ grid-template-columns: 1fr; }
+  }
+
+  /* ----- how-it-works split ----- */
+  .how-grid{
+    display:grid;
+    grid-template-columns: 1.25fr 0.75fr;
+    gap: 14px;
+    align-items: start;
+  }
+  @media (max-width: 960px){
+    .how-grid{ grid-template-columns: 1fr; }
+  }
+
+  /* ----- buttons feel tighter ----- */
+  .btnlink { white-space: nowrap; }
+  .mini-login input { width: 100%; }
+
+  /* ----- funding/ack grid ----- */
+  .fund-grid{
+    display:grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 14px;
+    align-items: start;
+  }
+  @media (max-width: 960px){
+    .fund-grid{ grid-template-columns: 1fr; }
+  }
+
+  .fund-logos{
+    display:grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+  @media (max-width: 520px){
+    .fund-logos{ grid-template-columns: 1fr; }
+  }
+  .fund-logos img{
+    height: 64px;
+    width: 100%;
+    object-fit: contain;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+  }
+
+  /* clean list spacing */
+  ol, ul { margin: 0; }
+</style>
+
+<div class="landing">
+
+  <!-- HERO + MINI LOGIN -->
+  <div class="hero">
+    <div class="hero-grid">
+
+      <!-- left -->
+      <div>
+        <h1 style="margin:0 0 6px 0;">JuDDGES</h1>
+        <p class="muted" style="margin:0; line-height:1.5;">
+          <b>Judicial Decision Data Gathering, Encoding and Sharing</b> — an Open Science platform for scalable,
+          transparent, human-validated judicial decision analysis across jurisdictions.
+        </p>
+
+        <div class="meta" style="margin-top:10px;">
+          <span class="pill">NLP + HITL</span>
+          <span class="pill">Open Data &amp; Software</span>
+          <span class="pill">Cross-jurisdiction</span>
+          <span class="pill">Audit-ready exports</span>
+        </div>
+
+        <!-- partner logos -->
+        <div class="card" style="margin-top:12px; padding:12px;">
+          <div class="logo-grid">
+            <div class="logo-tile">
+              <img src="/static/logos/mdx.png" alt="Middlesex University">
+            </div>
+            <div class="logo-tile">
+              <img src="/static/logos/lyon.png" alt="Lyon Partner University">
+            </div>
+            <div class="logo-tile">
+              <img src="/static/logos/poland.png" alt="Poland Partner University">
+            </div>
+          </div>
+        </div>
+
+        <!-- active learning card (full width, no flex hacks) -->
+        <div class="card" style="margin-top:12px; padding:12px;">
+          <h3 style="margin:0 0 6px 0;">Powered by Margin-Aware Active Learning</h3>
+{#          <div class="muted small" style="line-height:1.6;">#}
+            The system can prioritise the most informative decisions for expert review (e.g., ambiguous/low-confidence cases),
+            improving consistency and reducing annotation cost over time.
+            <div style="margin-top:8px;">
+              <a class="btnlink" href="https://www.researchgate.net/profile/Santosh-Tirunagari/publication/399225922_Margin-aware_Active_Learning_for_User-adaptive_Text_Classification/links/6954edb10c98040d482546cc/Margin-aware-Active-Learning-for-User-adaptive-Text-Classification.pdf">
+                View paper (PDF)
+              </a>
+            </div>
+{#          </div>#}
+        </div>
+      </div>
+
+      <!-- right: login (no fixed min-width) -->
+      <div>
+        <div class="card mini-login" style="padding:14px;">
+          <h2 class="section-title">Sign in</h2>
+
+          {% if error %}
+            <div class="alert">{{ error }}</div>
+          {% endif %}
+
+          <form method="post" action="/auth/login">
+            <div style="margin-bottom:10px;">
+              <label class="muted">Username or Email</label>
+              <input type="text" name="username" autocomplete="username" required>
+            </div>
+            <div style="margin-bottom:12px;">
+              <label class="muted">Password</label>
+              <input type="password" name="password" autocomplete="current-password" required>
+            </div>
+
+            <button type="submit" class="btnlink" style="width:100%;">Login</button>
+          </form>
+
+          <hr style="margin:14px 0; opacity:.25;">
+
+          <div class="muted small" style="line-height:1.5;">
+            New here?
+            <a class="btnlink" href="/auth/register" style="display:inline-flex; margin-top:8px;">Create an account</a>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- WHAT / WHY -->
+  <div class="two-col">
+    <div class="card" style="padding:14px;">
+      <h2 style="margin:0 0 8px 0;">Project Overview</h2>
+      <p class="muted" style="margin:0; line-height:1.6;">
+        JuDDGES harnesses state-of-the-art Natural Language Processing and Human-in-the-Loop (HITL) methods to enable
+        scalable, flexible, and on-going meta-annotation — combining automated suggestions with domain experts in-the-loop.
+      </p>
+      <p class="muted" style="margin:10px 0 0 0; line-height:1.6;">
+        The platform supports legal records and judgments across jurisdictions, including <b>England &amp; Wales</b>,
+        <b>Poland</b>, and partner work in <b>Lyon (France)</b>.
+      </p>
+      <div class="meta" style="margin-top:10px;">
+        <span class="pill">Use-case: criminal judgments</span>
+        <span class="pill">Method: expert-validated annotation</span>
+        <span class="pill">Outcome: reusable datasets</span>
+      </div>
+    </div>
+
+    <div class="card" style="padding:14px;">
+      <h2 style="margin:0 0 8px 0;">Why this matters</h2>
+      <p class="muted" style="margin:0; line-height:1.6;">
+        We reduce barriers of resources, language, and data/format inhomogeneity that impede research on judicial decision-making.
+        Open tools + open outputs enable researchers to empirically test theories and inform evidence-led policy questions.
+      </p>
+      <div class="alert" style="margin-top:10px;">
+        <b>Designed for legal researchers</b> — simple interface, research-grade traceability.
+      </div>
+    </div>
+  </div>
+
+  <!-- HOW IT WORKS -->
+  <div class="card" style="padding:14px;">
+    <h2 style="margin:0 0 10px 0;">How the platform works (AI + Human-in-the-Loop)</h2>
+
+    <div class="how-grid">
+      <div>
+        <h3 style="margin:0 0 8px 0;">Workflow</h3>
+        <ol style="padding-left:18px; line-height:1.7;">
+          <li><b>Ingest</b> legal decisions into a searchable corpus</li>
+          <li><b>Suggest</b> topics/codes using NLP models</li>
+          <li><b>Validate</b> with expert review (accept / reject / correct)</li>
+          <li><b>Audit</b> decisions and maintain traceability</li>
+          <li><b>Export</b> structured datasets for analysis (CSV/SPSS-ready)</li>
+        </ol>
+        <div class="muted small" style="margin-top:10px;">
+          AI accelerates discovery; human expertise protects validity and interpretability.
+        </div>
+      </div>
+
+      <div>
+        <h3 style="margin:0 0 8px 0;">What you can do</h3>
+        <div class="meta" style="margin:0;">
+          <span class="pill">Search at scale</span>
+          <span class="pill">Meta-annotate</span>
+          <span class="pill">Compare jurisdictions</span>
+          <span class="pill">Track decisions</span>
+          <span class="pill">Reuse &amp; share</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OPEN RESOURCES -->
+  <div class="card" style="padding:14px;">
+    <h2 style="margin:0 0 10px 0;">Open resources</h2>
+
+    <div class="two-col">
+      <div>
+        <h3 style="margin:0 0 6px 0;">Zenodo Community</h3>
+        <p class="muted" style="margin:0; line-height:1.6;">
+          Open outputs: coding schemes, reports, workshop materials, and publications.
+        </p>
+        <div style="margin-top:10px;">
+          <a class="btnlink" href="https://zenodo.org/communities/juddgesproject/records?q=&amp;l=list&amp;p=1&amp;s=10&amp;sort=newest">Browse Zenodo community</a>
+        </div>
+      </div>
+
+      <div>
+        <h3 style="margin:0 0 6px 0;">Datasets (HuggingFace)</h3>
+        <p class="muted" style="margin:0; line-height:1.6;">
+          Project datasets and structured releases:
+          <a href="https://huggingface.co/JuDDGES">https://huggingface.co/JuDDGES</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- PUBLICATIONS -->
+  <div class="card" style="padding:14px;">
+    <h2 style="margin:0 0 10px 0;">Selected publications</h2>
+    <div class="muted" style="line-height:1.6;">
+      <p style="margin:0 0 10px 0;">
+        Abbas, W., Zia, T., <b>Tirunagari, S.</b>, Chennareddy, V., <b>Dhami, M.</b>, &amp; <b>Windridge, D.</b> (2026).
+        <i>The Application of Pre-trained Transformer Models to UK Court of Appeal Legal Judgments</i>. Springer Nature.
+        <a href="https://doi.org/10.1007/978-981-95-4963-4_21">DOI</a>
+      </p>
+      <p style="margin:0 0 10px 0;">
+        <b>Dhami, M.</b>, Kajdanowicz, T., Windridge, D., &amp; Boukacem-Zeghmouri, C. (2025).
+        <i>Judges on Trial: The Future of Research on Judicial Decision-Making</i>. Wiley.
+        <a href="https://doi.org/10.5281/zenodo.15658177">DOI</a>
+      </p>
+      <p style="margin:0;">
+        Tirunagari, S., Dhami, M., &amp; Windridge, D. (2025).
+        <b>Margin-aware Active Learning for User-adaptive Text Classification</b>.
+        <a href="https://www.researchgate.net/profile/Santosh-Tirunagari/publication/399225922_Margin-aware_Active_Learning_for_User-adaptive_Text_Classification/links/6954edb10c98040d482546cc/Margin-aware-Active-Learning-for-User-adaptive-Text-Classification.pdf">PDF</a>
+      </p>
+    </div>
+  </div>
+
+  <!-- FUNDING + ACK + CONTACT -->
+  <div class="card" style="padding:14px;">
+    <h2 style="margin:0 0 10px 0;">Funding, Acknowledgements &amp; Contact</h2>
+
+    <div class="fund-grid">
+      <div>
+        <p class="muted" style="margin:0 0 10px 0; line-height:1.6;">
+          <b>Project funded by:</b><br>
+          Engineering and Physical Sciences Research Council (EPSRC)<br>
+          Grant <b>EP/Y035992/1</b> – <i>Judicial Decision Data Gathering, Encoding and Sharing</i>
+        </p>
+
+        <p class="muted" style="margin:0 0 12px 0; line-height:1.6;">
+          Supported under the
+          <a href="https://www.chistera.eu/sites/www.chistera.eu/files/CHIST-ERA%20Call%20ORD%20-%20List%20of%20Selected%20Projects.pdf">
+            CHIST-ERA Call ORD “Open &amp; Re-usable Research Data &amp; Software”
+          </a>
+        </p>
+
+        <p class="muted" style="margin:0; line-height:1.6;">
+          <b>Contact:</b><br>
+          Prof. Mandeep K. Dhami<br>
+          <span class="mono email" data-user="m.dhami" data-domain="mdx.ac.uk"></span><br><br>
+          Prof. David Windridge<br>
+          <span class="mono email" data-user="d.windridge" data-domain="mdx.ac.uk"></span>
+        </p>
+
+        <div class="fund-logos">
+          <img src="/static/logos/ukri_epsrc.png" alt="UKRI EPSRC">
+          <img src="/static/logos/chistera.png" alt="CHIST-ERA">
+        </div>
+      </div>
+
+      <div>
+        <div class="meta" style="margin:0 0 10px 0;">
+          <span class="pill">Acknowledgements</span>
+        </div>
+
+        <div class="muted" style="font-size:13px; line-height:1.65;">
+          We are grateful to <b>Charis Bechan</b> and <b>Vili Hadzhieva</b> for their annotation contributions.<br><br>
+          We also thank <b>Mahensingh Deonaran</b> (Middlesex University) for curating the initial dataset version and
+          supporting early data preparation.
+        </div>
+
+        <div class="meta" style="margin-top:12px;">
+          <span class="pill">Open Science</span>
+          <span class="pill">Open Infrastructure</span>
+          <span class="pill">Public Reuse</span>
+        </div>
+
+        <div class="muted small" style="margin-top:10px; line-height:1.5;">
+          If you are a public institution and want to reuse the data/tooling, please get in touch for access and guidance.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Email Obfuscation Script -->
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const emails = document.querySelectorAll(".email");
+  emails.forEach(function (el) {
+    const user = el.getAttribute("data-user");
+    const domain = el.getAttribute("data-domain");
+    if (user && domain) {
+      const email = user + "@" + domain;
+      el.innerHTML = '<a href="mailto:' + email + '">' + email + '</a>';
+    }
+  });
+});
+</script>
+
+{% endblock %}

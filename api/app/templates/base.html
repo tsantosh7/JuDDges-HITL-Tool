@@ -11,13 +11,12 @@
 
 <header class="topbar">
   <div class="brand">
-    <a href="{{ '/ui/dashboard' if user else '/ui/about' }}" class="brandlink">JUDDGES</a>
+    <a href="{{ '/ui/dashboard' if user else '/' }}" class="brandlink">JUDDGES</a>
   </div>
 
   <nav class="nav">
-    <a href="/ui/about" class="{% if _path.startswith('/ui/about') %}active{% endif %}">About</a>
-
-    {% if user %}
+     {% if user %}
+      <a href="/ui/about" class="{% if _path.startswith('/ui/about') %}active{% endif %}">About</a>
       <a href="/ui/search" class="{% if _path.startswith('/ui/search') %}active{% endif %}">Search Documents</a>
       <a href="/ui/add_to_project" class="{% if _path.startswith('/ui/add_to_project') %}active{% endif %}">Add to Project</a>
       <a href="/ui/export" class="{% if _path.startswith('/ui/export') %}active{% endif %}">Extract Coded Data</a>
@@ -41,8 +40,8 @@
       </span>
 
       <a class="btnlink" href="/auth/logout">Logout</a>
-    {% else %}
-      <a class="btnlink" href="/auth/login">Login</a>
+{#    {% else %}#}
+{#      <a class="btnlink" href="/auth/login">Login</a>#}
     {% endif %}
   </div>
 </header>

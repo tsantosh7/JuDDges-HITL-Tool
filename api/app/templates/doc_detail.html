@@ -51,6 +51,10 @@
 {% set back_fallback = ("/ui/search?core=" ~ (_core|urlencode)) if _core else "/ui/search" %}
 {% set back_href = back_url if back_url else back_fallback %}
 
+{% if request.query_params.get("msg") == "added" %}
+  <div class="alert">✅ Added to project.</div>
+{% endif %}
+
 <div class="row" style="align-items:center; justify-content:space-between;">
   <div>
     <h1 class="mono" style="margin-bottom:4px;">{{ doc_id[:8] }}</h1>

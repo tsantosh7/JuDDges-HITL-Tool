@@ -4,6 +4,10 @@
 *.env
 *.txt
 *.csv
+# Backup artifacts
+_backup/
+*.tgz
+.hyp_push_state.json
 
 # local data
 data/
@@ -13,6 +17,7 @@ __pycache__/
 .idea/
 # snapshots
 data/hypothesis/
+
 
 #runs
 training/runs/

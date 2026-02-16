@@ -1,0 +1,24 @@
+{% include "partials/header.html" ignore missing %}
+<div class="centered">
+  <div class="card">
+    <h1>Upgrade</h1>
+
+    {% if request.query_params.get("error") %}
+      <div class="alert">Payment cancelled.</div>
+    {% endif %}
+
+    <p class="muted">Choose a plan:</p>
+
+    <form method="post" action="/auth/billing/checkout" style="margin-bottom:10px;">
+      <input type="hidden" name="price_key" value="monthly">
+      <button type="submit">Pro (Monthly)</button>
+    </form>
+
+    <form method="post" action="/auth/billing/checkout">
+      <input type="hidden" name="price_key" value="yearly">
+      <button type="submit">Pro (Yearly)</button>
+    </form>
+
+    <p class="muted" style="margin-top:12px;"><a href="/ui/dashboard">Back</a></p>
+  </div>
+</div>

@@ -380,15 +380,70 @@
   </details>
 </div>
 
-<hr style="margin:16px 0; opacity:.25;">
-<div class="card">
-  <h2 style="margin-top:0;">Funding &amp; Contact</h2>
+{#<hr style="margin:16px 0; opacity:.25;">#}
+{#<div class="card">#}
+{#  <h2 style="margin-top:0;">Funding &amp; Contact</h2>#}
+{##}
+{#  <div class="row" style="gap:16px; align-items:flex-start;">#}
+{#    <div class="grow">#}
+{#      <p class="muted" style="margin:0 0 10px 0;">#}
+{#        <b>Project funded by:</b>#}
+{#        <a href="https://www.chistera.eu/sites/www.chistera.eu/files/CHIST-ERA%20Call%20ORD%20-%20List%20of%20Selected%20Projects.pdf">#}
+{#          CHIST-ERA Call ORD “Open &amp; Re-usable Research Data &amp; Software”#}
+{#        </a>#}
+{#      </p>#}
+{##}
+{#      <p class="muted" style="margin:0 0 8px 0;">#}
+{#        <b>Contact:</b><br>#}
+{##}
+{#        Prof. Mandeep K. Dhami<br>#}
+{#        <span class="mono email" data-user="m.dhami" data-domain="mdx.ac.uk"></span>#}
+{#        <br><br>#}
+{##}
+{#        Prof. David Windridge<br>#}
+{#        <span class="mono email" data-user="d.windridge" data-domain="mdx.ac.uk"></span>#}
+{#      </p>#}
+{##}
+{#      <!-- Funding logos -->#}
+{#      <div class="row" style="gap:30px; align-items:center; justify-content:flex-start; margin-top:14px;">#}
+{#        <img src="/static/logos/ukri_epsrc.png" alt="UKRI EPSRC"#}
+{#             style="height:72px; max-width:280px; object-fit:contain; padding:10px; border:1px solid var(--border); border-radius:12px; background:#fff;">#}
+{#        <img src="/static/logos/chistera.png" alt="CHIST-ERA"#}
+{#             style="height:72px; max-width:280px; object-fit:contain; padding:10px; border:1px solid var(--border); border-radius:12px; background:#fff;">#}
+{#      </div>#}
+{#    </div>#}
+{##}
+{#    <div style="min-width:280px; flex:1 1 280px;">#}
+{#      <div class="meta" style="margin-top:0;">#}
+{#        <span class="pill">Open Science</span>#}
+{#        <span class="pill">Open Infrastructure</span>#}
+{#        <span class="pill">Public Reuse</span>#}
+{#      </div>#}
+{#      <div class="muted" style="font-size:12px; margin-top:10px;">#}
+{#        If you are a public institution and want to reuse the data/tooling, please get in touch for access and guidance.#}
+{#      </div>#}
+{#    </div>#}
+{#  </div>#}
+{#</div>#}
 
-  <div class="row" style="gap:16px; align-items:flex-start;">
+{#    <hr style="margin:24px 0; opacity:.25;">#}
+
+<div class="card">
+  <h2 style="margin-top:0;">Funding, Acknowledgements &amp; Contact</h2>
+
+  <div class="row" style="gap:28px; align-items:flex-start;">
+
+    <!-- LEFT COLUMN -->
     <div class="grow">
-      <p class="muted" style="margin:0 0 10px 0;">
-        <b>Project funded by:</b>
-        <a href="https://www.chistera.eu/sites/www.chistera.eu/files/CHIST-ERA%20Call%20ORD%20-%20List%20of%20Selected%20Projects.pdf">
+
+      <p class="muted" style="margin:0 0 12px 0; line-height:1.6;">
+        <b>Project funded by:</b><br>
+        Engineering and Physical Sciences Research Council (EPSRC)<br>
+        Grant <b>EP/Y035992/1</b> – <i>Judicial Decision Data Gathering, Encoding and Sharing</i>
+      </p>
+
+      <p class="muted" style="margin:0 0 14px 0; line-height:1.6;">
+        Supported under the   <a href="https://www.chistera.eu/sites/www.chistera.eu/files/CHIST-ERA%20Call%20ORD%20-%20List%20of%20Selected%20Projects.pdf">
           CHIST-ERA Call ORD “Open &amp; Re-usable Research Data &amp; Software”
         </a>
       </p>
@@ -404,25 +459,43 @@
         <span class="mono email" data-user="d.windridge" data-domain="mdx.ac.uk"></span>
       </p>
 
-      <!-- Funding logos -->
-      <div class="row" style="gap:30px; align-items:center; justify-content:flex-start; margin-top:14px;">
+      <!-- Logos -->
+      <div class="row" style="gap:24px; align-items:center; margin-top:14px;">
         <img src="/static/logos/ukri_epsrc.png" alt="UKRI EPSRC"
-             style="height:72px; max-width:280px; object-fit:contain; padding:10px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+             style="height:68px; max-width:260px; object-fit:contain; padding:8px; border:1px solid var(--border); border-radius:10px; background:#fff;">
         <img src="/static/logos/chistera.png" alt="CHIST-ERA"
-             style="height:72px; max-width:280px; object-fit:contain; padding:10px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+             style="height:68px; max-width:260px; object-fit:contain; padding:8px; border:1px solid var(--border); border-radius:10px; background:#fff;">
       </div>
+
     </div>
 
-    <div style="min-width:280px; flex:1 1 280px;">
-      <div class="meta" style="margin-top:0;">
+    <!-- RIGHT COLUMN -->
+    <div style="flex:1 1 320px; min-width:280px;">
+
+      <div class="meta" style="margin-bottom:10px;">
+        <b>Acknowledgements</b>
+      </div>
+
+      <div class="muted" style="font-size:13px; line-height:1.6;">
+
+        We are grateful to <b>Charis Bechan</b> and <b>Vili Hadzhieva</b>
+        for their valuable annotation contributions.
+
+        <br><br>
+
+        We also thank <b>Mahensingh Deonaran</b> (Middlesex University)
+        for curating the initial dataset version and supporting early data preparation.
+
+      </div>
+
+      <div class="meta" style="margin-top:14px;">
         <span class="pill">Open Science</span>
         <span class="pill">Open Infrastructure</span>
         <span class="pill">Public Reuse</span>
       </div>
-      <div class="muted" style="font-size:12px; margin-top:10px;">
-        If you are a public institution and want to reuse the data/tooling, please get in touch for access and guidance.
-      </div>
+
     </div>
+
   </div>
 </div>
 

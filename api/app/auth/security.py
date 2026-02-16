@@ -27,3 +27,10 @@ def hash_access_code(code: str) -> str:
 
 def verify_access_code(code: str, code_hash: str) -> bool:
     return pwd_context.verify(code, code_hash)
+
+# app/auth/security.py
+def hash_reset_token(token: str) -> str:
+    return pwd_context.hash(token)
+
+def verify_reset_token(token: str, token_hash: str) -> bool:
+    return pwd_context.verify(token, token_hash)
