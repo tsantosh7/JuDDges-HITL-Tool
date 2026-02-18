@@ -3,6 +3,12 @@
 
 <h1>Admin: Access Codes</h1>
 
+    {% if message %}
+  <div class="alert success">{{ message }}</div>
+{% endif %}
+
+
+
 <div class="card" style="max-width: 920px; margin: 0 auto;">
 
   <p class="muted" style="margin-top:-6px;">
@@ -37,7 +43,49 @@
     </div>
   {% endif %}
 
-  <hr style="margin:16px 0; border:none; border-top:1px solid #eee;">
+<div class="card" style="margin-bottom:12px;">
+  <h2>Send Access Code by Email</h2>
+  <p class="muted" style="margin-top:-6px;">Generates a new access code and emails it to the recipient (locked to that email).</p>
+
+  <form method="post" action="/auth/admin/codes/send_email">
+    <div style="margin-bottom:10px;">
+      <label class="muted">Recipient email</label>
+      <input type="email" name="recipient_email" required style="width:100%;">
+    </div>
+
+    <div class="row" style="gap:10px; margin-bottom:10px;">
+      <div class="grow">
+        <label class="muted">Days granted</label>
+        <input type="number" name="days_granted" value="7" min="1" max="365" style="width:100%;">
+      </div>
+      <div class="grow">
+        <label class="muted">Expires (hours)</label>
+        <input type="number" name="expires_hours" value="48" min="1" max="8760" style="width:100%;">
+      </div>
+    </div>
+
+    <div class="row" style="gap:10px; margin-bottom:10px;">
+      <div class="grow">
+        <label class="muted">Plan granted</label>
+        <select name="plan_granted" style="width:100%;">
+          <option value="trial" selected>trial</option>
+          <option value="comped">comped</option>
+          <option value="paid">paid</option>
+        </select>
+      </div>
+      <div class="grow">
+        <label class="muted">Max uses</label>
+        <input type="number" name="max_uses" value="1" min="1" max="1000" style="width:100%;">
+      </div>
+    </div>
+
+    <button type="submit" class="btnlink">Generate &amp; Email Code</button>
+  </form>
+</div>
+
+
+{#  <hr style="margin:16px 0; border:none; border-top:1px solid #eee;">#}
+<div style="height:10px;"></div>
 
   <form method="post" action="/auth/admin/codes">
     <div class="row" style="gap:12px;">

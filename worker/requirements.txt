@@ -1,4 +1,15 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 psycopg[binary]==3.2.1
-sentence-transformers==2.7.0
-faiss-cpu==1.8.0
 numpy==1.26.4
+faiss-cpu==1.8.0
+
+# Force CPU-only torch so pip doesn't pull CUDA (nvidia_*_cu12) wheels
+torch==2.10.0
+sentence-transformers==2.7.0
+
+
+#psycopg[binary]==3.2.1
+#sentence-transformers==2.7.0
+#faiss-cpu==1.8.0
+#numpy==1.26.4

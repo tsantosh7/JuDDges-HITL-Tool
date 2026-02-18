@@ -25,25 +25,50 @@
     {% endif %}
   </nav>
 
-  <div class="right">
-    {% if user %}
-      {% if _pn %}
-        <span class="pill">Project: {{ _pn }}</span>
-      {% else %}
-        <span class="pill muted">No project selected</span>
-      {% endif %}
-
-      <span class="pill">
-        {{ user.username if user and user.username else "user" }}
-        ·
-        {{ user.role if user and user.role else "" }}
-      </span>
-
-      <a class="btnlink" href="/auth/logout">Logout</a>
+{#  <div class="right">#}
+{#    {% if user %}#}
+{#      {% if _pn %}#}
+{#        <span class="pill">Project: {{ _pn }}</span>#}
+{#      {% else %}#}
+{#        <span class="pill muted">No project selected</span>#}
+{#      {% endif %}#}
+{##}
+{#      <span class="pill">#}
+{#        {{ user.username if user and user.username else "user" }}#}
+{#        ·#}
+{#        {{ user.role if user and user.role else "" }}#}
+{#      </span>#}
+{#        {% set _plan = (user.plan if user and user.plan else "") %}#}
+{#        {% if _plan in ["free", "trial"] %}#}
+{#          <a class="btnlink" href="/auth/request_access">Request access</a>#}
+{#        {% endif %}#}
+{#      <a class="btnlink" href="/auth/logout">Logout</a>#}
 {#    {% else %}#}
 {#      <a class="btnlink" href="/auth/login">Login</a>#}
+{#    {% endif %}#}
+{#  </div>#}
+<div class="right">
+  {% if user %}
+    {% if _pn %}
+      <span class="pill">Project: {{ _pn }}</span>
+    {% else %}
+      <span class="pill muted">No project selected</span>
     {% endif %}
-  </div>
+
+    <span class="pill">
+      {{ user.username if user and user.username else "user" }}
+      ·
+      {{ user.role if user and user.role else "" }}
+    </span>
+
+    {% set _plan = (user.plan if user and user.plan else "") %}
+    {% if _plan in ["free", "trial"] %}
+      <a class="btnlink" href="/auth/request_access">Request access</a>
+    {% endif %}
+
+    <a class="btnlink" href="/auth/logout">Logout</a>
+  {% endif %}
+</div>
 </header>
 
 

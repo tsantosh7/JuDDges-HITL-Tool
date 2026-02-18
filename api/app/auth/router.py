@@ -22,7 +22,7 @@ import smtplib
 from email.message import EmailMessage
 import secrets
 # import stripe
-
+from datetime import timezone
 
 from app.auth.models import User, AccessCode, PasswordResetToken
 from app.auth.security import (
@@ -365,6 +365,7 @@ def admin_codes_page(request: Request, user=Depends(require_role("admin"))):
                 "error": None,
                 "created": None,
                 "codes": codes,
+                "message": None,
             },
         )
     finally:
@@ -448,11 +449,132 @@ def admin_codes_create_page(
 
         return request.app.state.templates.TemplateResponse(
             "admin_codes.html",
-            {"request": request, "user": user, "error": None, "created": created, "codes": codes},
+            {"request": request,
+             "user": user,
+             "error": None,
+             "created": created,
+             "codes": codes,
+             "message": None,
+             },
         )
     finally:
         db.close()
 
+@router.post("/admin/codes/send_email", response_class=HTMLResponse)
+def admin_send_code_email(
+    request: Request,
+    recipient_email: str = Form(...),     # who receives the email
+    days_granted: int = Form(7),
+    expires_hours: int = Form(48),
+    plan_granted: str = Form("trial"),
+    max_uses: int = Form(1),
+    user=Depends(require_role("admin")),
+):
+    """
+    Admin-only: generate an access code and EMAIL it to the recipient.
+    Plaintext code is never stored in DB.
+    """
+    recipient_email = (recipient_email or "").strip().lower()
+    if not recipient_email or "@" not in recipient_email:
+        return request.app.state.templates.TemplateResponse(
+            "admin_codes.html",
+            {"request": request, "user": user, "error": "Please enter a valid recipient email.", "created": None, "message": None, "codes": []},
+            status_code=400,
+        )
+
+    # clamp inputs (same safety as your create endpoint)
+    try:
+        days_granted = max(1, min(int(days_granted), 365))
+        expires_hours = max(1, min(int(expires_hours), 24 * 365))
+        max_uses = max(1, min(int(max_uses), 1000))
+    except Exception:
+        days_granted, expires_hours, max_uses = 7, 48, 1
+
+    plan_granted = (plan_granted or "trial").strip().lower()
+    if plan_granted not in {"trial", "comped", "paid"}:
+        plan_granted = "trial"
+
+    code_plain = generate_access_code(prefix="ACCESS")
+    code_h = hash_access_code(code_plain)
+
+    db = SessionLocal()
+    try:
+        ac = AccessCode(
+            code_hash=code_h,
+            purpose="access",
+            plan_granted=plan_granted,
+            days_granted=days_granted,
+            allowed_email=recipient_email,  # lock to the recipient (prevents sharing)
+            max_uses=max_uses,
+            uses=0,
+            expires_at=_now_utc() + timedelta(hours=expires_hours),
+            issued_by_user_id=user.get("id"),
+        )
+        db.add(ac)
+        db.commit()
+
+        # Send email
+        base = _public_base_url(request)
+        redeem_link = f"{base}/auth/redeem"
+
+
+        expires_readable = ac.expires_at.astimezone(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+
+        subject = "Your JuDDGES Access Code"
+
+        body = (
+            f"Hello,\n\n"
+            f"You have been granted access to JuDDGES.\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔐 ACCESS CODE\n"
+            f"{code_plain}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Details:\n"
+            f"• Plan: {plan_granted.capitalize()}\n"
+            f"• Access duration: {days_granted} day(s)\n"
+            f"• Code valid until: {expires_readable}\n\n"
+            f"To activate your access:\n"
+            f"1) Log in to your account\n"
+            f"2) Visit: {redeem_link}\n"
+            f"3) Enter the access code above\n\n"
+            f"If you did not expect this email, you can safely ignore it.\n\n"
+            f"— JuDDGES Team\n"
+        )
+
+        _send_email(to_email=recipient_email, subject=subject, body=body)
+
+        # Reload list for display
+        rows = db.execute(select(AccessCode).order_by(AccessCode.expires_at.desc())).scalars().all()
+        now = _now_utc()
+        codes = []
+        for r in rows[:50]:
+            expired = bool(r.expires_at and r.expires_at <= now)
+            used_up = bool(r.max_uses is not None and r.uses is not None and r.uses >= r.max_uses)
+            status = "expired" if expired else ("used" if used_up else "active")
+            codes.append(
+                {
+                    "purpose": r.purpose,
+                    "plan_granted": r.plan_granted,
+                    "days_granted": r.days_granted,
+                    "allowed_email": r.allowed_email,
+                    "uses": r.uses,
+                    "max_uses": r.max_uses,
+                    "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                    "status": status,
+                    "redeemed_at": r.redeemed_at.isoformat() if getattr(r, "redeemed_at", None) else None,
+                    "redeemed_by_user_id": str(r.redeemed_by_user_id) if getattr(r, "redeemed_by_user_id", None) else None,
+                    "code_hash_prefix": (r.code_hash[:10] + "…") if getattr(r, "code_hash", None) else None,
+                }
+            )
+
+        msg = f"Access code emailed to {recipient_email} (locked to that email)."
+
+        return request.app.state.templates.TemplateResponse(
+            "admin_codes.html",
+            {"request": request, "user": user, "error": None, "created": None, "message": msg, "codes": codes},
+        )
+    finally:
+        db.close()
 
 @router.get("/admin/users", response_class=HTMLResponse)
 def admin_users_page(request: Request, user=Depends(require_role("admin"))):
@@ -511,11 +633,43 @@ def admin_revoke_user_access(
 
 
 
+# def _send_email(to_email: str, subject: str, body: str) -> None:
+#     """
+#     Minimal SMTP sender.
+#     If SMTP_* not set, we just log the email to console (dev mode).
+#     """
+#     host = os.getenv("SMTP_HOST", "").strip()
+#     port = int(os.getenv("SMTP_PORT", "587"))
+#     user = os.getenv("SMTP_USER", "").strip()
+#     pwd = os.getenv("SMTP_PASS", "").strip()
+#     sender = os.getenv("SMTP_FROM", user).strip()
+#
+#     if not host or not sender:
+#         print("\n=== DEV EMAIL (SMTP not configured) ===")
+#         print("TO:", to_email)
+#         print("SUBJECT:", subject)
+#         print(body)
+#         print("=== END ===\n")
+#         return
+#
+#     msg = EmailMessage()
+#     msg["From"] = sender
+#     msg["To"] = to_email
+#     msg["Subject"] = subject
+#     msg.set_content(body)
+#
+#     with smtplib.SMTP(host, port, timeout=10) as s:
+#         s.ehlo()
+#         s.starttls()
+#         s.ehlo()
+#         if user and pwd:
+#             s.login(user, pwd)
+#         s.send_message(msg)
+import ssl
+import smtplib
+from email.message import EmailMessage
+
 def _send_email(to_email: str, subject: str, body: str) -> None:
-    """
-    Minimal SMTP sender.
-    If SMTP_* not set, we just log the email to console (dev mode).
-    """
     host = os.getenv("SMTP_HOST", "").strip()
     port = int(os.getenv("SMTP_PORT", "587"))
     user = os.getenv("SMTP_USER", "").strip()
@@ -536,10 +690,21 @@ def _send_email(to_email: str, subject: str, body: str) -> None:
     msg["Subject"] = subject
     msg.set_content(body)
 
-    with smtplib.SMTP(host, port) as s:
-        s.starttls()
+    timeout = int(os.getenv("SMTP_TIMEOUT", "15"))
+
+    # TLS context (safe defaults)
+    ctx = ssl.create_default_context()
+
+    # IMPORTANT: use explicit timeouts and EHLO before/after STARTTLS
+    with smtplib.SMTP(host, port, timeout=timeout) as s:
+        s.set_debuglevel(1)
+        s.ehlo()
+        s.starttls(context=ctx)
+        s.ehlo()
+
         if user and pwd:
             s.login(user, pwd)
+
         s.send_message(msg)
 
 
@@ -681,6 +846,90 @@ def reset_post(
         return RedirectResponse("/ui/dashboard?msg=Password%20updated", status_code=303)
     finally:
         db.close()
+
+@router.get("/request_access", response_class=HTMLResponse)
+def request_access_page(request: Request, user=Depends(require_user)):
+    return request.app.state.templates.TemplateResponse(
+        "request_access.html",
+        {"request": request, "user": user, "error": None, "ok": None},
+    )
+
+
+@router.post("/request_access", response_class=HTMLResponse)
+def request_access_post(
+    request: Request,
+    message: str = Form(""),
+    user=Depends(require_user),
+):
+    """
+    Logged-in user requests an access code / extension.
+    Emails the admin address using SMTP. No DB changes.
+    """
+    print(">>> request_access_post HIT", user)
+    admin_email = (os.getenv("ADMIN_EMAIL") or "").strip()
+    if not admin_email:
+        return request.app.state.templates.TemplateResponse(
+            "request_access.html",
+            {
+                "request": request,
+                "user": user,
+                "error": "ADMIN_EMAIL is not configured on the server.",
+                "ok": None,
+            },
+            status_code=500,
+        )
+
+    msg = (message or "").strip()
+    if len(msg) > 2000:
+        msg = msg[:2000]
+
+    base = _public_base_url(request)
+
+    # user dict (from session)
+    u_email = (user.get("email") or "").strip()
+    u_username = (user.get("username") or "").strip()
+    u_plan = (user.get("plan") or "").strip()
+    u_access_until = user.get("access_until") or "N/A"
+    u_id = user.get("id") or "N/A"
+
+    subject = f"JuDDGES access request: {u_username or u_email}"
+
+    body = (
+        f"A user requested access / trial extension.\n\n"
+        f"User details:\n"
+        f"• Username: {u_username}\n"
+        f"• Email: {u_email}\n"
+        f"• User ID: {u_id}\n"
+        f"• Current plan: {u_plan}\n"
+        f"• Access until: {u_access_until}\n\n"
+        f"Suggested next step:\n"
+        f"1) Go to {base}/auth/admin/codes\n"
+        f"2) Use “Send Access Code by Email” to send a code to: {u_email}\n\n"
+        f"User message:\n"
+        f"{msg if msg else '(no message provided)'}\n"
+    )
+
+    print(">>> about to send email to admin:", admin_email)
+    try:
+        _send_email(to_email=admin_email, subject=subject, body=body)
+    except Exception as e:
+        print(">>> request_access_post email failed:", repr(e))
+        return request.app.state.templates.TemplateResponse(
+            "request_access.html",
+            {
+                "request": request,
+                "user": user,
+                "error": "We couldn’t send your request email right now. Please try again in a minute.",
+                "ok": None,
+            },
+            status_code=200,  # don't show scary 500
+        )
+    print(">>> email send finished")
+    return request.app.state.templates.TemplateResponse(
+        "request_access.html",
+        {"request": request, "user": user, "error": None, "ok": "Request sent. We’ll email you an access code soon."},
+    )
+
 
 #######################STRIPE###########################
 

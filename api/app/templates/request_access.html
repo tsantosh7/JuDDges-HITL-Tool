@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Request Access</h1>
+
+<div class="card" style="max-width: 640px; margin: 0 auto;">
+
+  <p class="muted" style="margin-top:-6px;">
+    Tell us briefly why you need extended access. We’ll review and email an access code to your account email.
+  </p>
+
+  <div class="card" style="background:#fafafa;">
+    <div><strong>Account:</strong> {{ user.email }}</div>
+    <div class="muted">Username: {{ user.username }} · Plan: {{ user.plan }} · Access until: {{ user.access_until or "N/A" }}</div>
+  </div>
+
+  {% if error %}
+    <div class="alert">{{ error }}</div>
+  {% endif %}
+
+  {% if ok %}
+    <div class="alert success">{{ ok }}</div>
+  {% endif %}
+
+<form method="post" action="/auth/request_access" style="margin-top:12px;">
+  <label class="muted" style="display:block; margin-bottom:6px;">Message (optional)</label>
+  <textarea name="message" rows="5" maxlength="2000" style="width:100%;"
+    placeholder="Example: Please extend access to complete Project X."></textarea>
+
+  <div style="margin-top:12px;">
+    <button type="submit" class="btnlink">Send request</button>
+    <a class="btnlink" href="/ui/dashboard" style="margin-left:10px;">Back</a>
+  </div>
+</form>
+
+
+</div>
+
+{% endblock %}
