@@ -5,6 +5,7 @@
 *.txt
 *.csv
 docker-compose.yml
+docker-compose*.yml
 # Backup artifacts
 _backup/
 *.tgz
