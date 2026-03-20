@@ -8,7 +8,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID
-
+import os
+import urllib.parse
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -18,11 +19,13 @@ from app.auth.deps import require_paid_user, require_role, require_user
 from app.db import SessionLocal
 
 from sqlalchemy import select, text, func
-from app.models import TopicRun, DocumentTopic
+from app.models import TopicRun, DocumentTopic, UserHypothesisWorkspace
 from app.models import ProjectDocument  # ensure imported
 
 from fastapi import Request
-
+from fastapi import Form
+from fastapi.responses import RedirectResponse
+from app.db import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -133,14 +136,39 @@ async def asgi_post_json(request: Request, path: str, payload: dict, *, timeout_
     return r.json() if r.content else None
 
 
-async def asgi_patch(request: Request, path: str, *, timeout_s: float = 60.0):
-    """
-    Internal ASGI PATCH helper that forwards cookies, pooled.
-    """
+# async def asgi_patch(request: Request, path: str, *, timeout_s: float = 60.0):
+#     """
+#     Internal ASGI PATCH helper that forwards cookies, pooled.
+#     """
+#     client: httpx.AsyncClient = request.app.state.asgi_client
+#     headers = _forward_cookie_headers(request)
+#
+#     r = await client.patch(path, headers=headers, timeout=timeout_s)
+#     try:
+#         r.raise_for_status()
+#     except httpx.HTTPStatusError as e:
+#         snippet = (r.text or "")[:2000]
+#         raise httpx.HTTPStatusError(
+#             message=f"ASGI PATCH failed: {r.status_code} {path} body={snippet}",
+#             request=e.request,
+#             response=e.response,
+#         ) from e
+#
+#     if (r.headers.get("content-type") or "").startswith("application/json"):
+#         return r.json()
+#     return {"ok": True}
+
+async def asgi_patch(
+    request: Request,
+    path: str,
+    payload: dict | None = None,
+    *,
+    timeout_s: float = 60.0,
+):
     client: httpx.AsyncClient = request.app.state.asgi_client
     headers = _forward_cookie_headers(request)
 
-    r = await client.patch(path, headers=headers, timeout=timeout_s)
+    r = await client.patch(path, json=payload, headers=headers, timeout=timeout_s)
     try:
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -504,7 +532,7 @@ async def ui_search(
     q: str = "",
     kw: str | None = None,
     kw_field: str = "all",
-    include_codes_topics: str | None = "1",
+    include_codes_topics: str | None = None,
     start: int = 0,
     scope: str = "all",
     code: str | None = None,
@@ -533,6 +561,22 @@ async def ui_search(
         start_i = 0
     if start_i < 0:
         start_i = 0
+
+    # Normalize checkbox state so it always behaves as 0/1
+    raw_include = request.query_params.getlist("include_codes_topics")
+    include_codes_topics = "1" if "1" in raw_include else "0"
+
+    def _as_bool_choice(v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        if s in ("", "any", "all"):
+            return None
+        if s in ("1", "true", "yes", "y"):
+            return "true"
+        if s in ("0", "false", "no", "n"):
+            return "false"
+        return None
 
     def _as_bool_choice(v: str | None) -> str | None:
         if v is None:
@@ -569,19 +613,30 @@ async def ui_search(
     elif span_choice == "false":
         fq.append("has_any_span_b:false")
 
-    advanced_q = (q or "").strip()
+################################# advanced search for future #####################
+    # advanced_q = (q or "").strip()
+    # kw_clean = (kw or "").strip()
+    #
+    # if advanced_q:
+    #     effective_q = advanced_q
+    # else:
+    #     # IMPORTANT: build_user_friendly_q() must NOT include Solr topic fields (yours is correct)
+    #     effective_q = build_user_friendly_q(
+    #         kw_clean,
+    #         kw_field,
+    #         include_codes_topics=(include_codes_topics == "1"),
+    #     )
+
+################# disable advanced search##########
+    advanced_q = ""
     kw_clean = (kw or "").strip()
 
-    if advanced_q:
-        effective_q = advanced_q
-    else:
-        # IMPORTANT: build_user_friendly_q() must NOT include Solr topic fields (yours is correct)
-        effective_q = build_user_friendly_q(
-            kw_clean,
-            kw_field,
-            include_codes_topics=(include_codes_topics == "1" or include_codes_topics is None),
-        )
-
+    effective_q = build_user_friendly_q(
+        kw_clean,
+        kw_field,
+        include_codes_topics=(include_codes_topics == "1"),
+    )
+############################################################################################
     # ✅ Minimal Solr fields; topics are shown from Postgres, not Solr
     fl = ",".join(
         [
@@ -673,7 +728,7 @@ async def ui_search(
                     "q": advanced_q,
                     "kw": kw_clean,
                     "kw_field": kw_field,
-                    "include_codes_topics": include_codes_topics or "1",
+                    "include_codes_topics": include_codes_topics, # or "1",
                     "start": start_i,
                     "code": code,
                     "topic": topic,
@@ -708,6 +763,9 @@ async def ui_search(
         # "include_facets": "1",
         "include_facets": "1" if start_i == 0 else "0",
     }
+
+    # ✅ ensure Hypothesis links open in model group
+    params["group_id"] = os.getenv("HYPOTHESIS_MODEL_GROUP_ID", "BXp1QL5v")
 
     if scope == "project":
         params["project_id"] = project_id
@@ -793,7 +851,7 @@ async def ui_search(
             "q": advanced_q,
             "kw": kw_clean,
             "kw_field": kw_field,
-            "include_codes_topics": include_codes_topics or "1",
+            "include_codes_topics": include_codes_topics,
             "start": start_i,
             "code": code,
             "topic": topic,
@@ -975,6 +1033,7 @@ async def ui_export_page(
     code: str | None = None,
     include_annotators: str | None = None,
     metric: str = "value",
+    column_order: str = "project_document_url",
     user=Depends(require_paid_user),
 ):
     project_id = await _ensure_project_selected(request)
@@ -996,6 +1055,7 @@ async def ui_export_page(
             "code": code,
             "include_annotators": include_annotators,
             "metric": metric,
+            "column_order": column_order,
         },
     )
 
@@ -1232,8 +1292,42 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
 # ============================================================
 @router.get("/docs/{document_id}", response_class=HTMLResponse)
 async def ui_doc_detail(request: Request, document_id: str, user=Depends(require_paid_user)):
-    import os
-    import urllib.parse
+    def _normalize_back_url(u: str | None) -> str:
+        """
+        Accepts encoded relative or absolute URLs.
+        Returns a safe relative path + query.
+        """
+        if not u:
+            return ""
+        u = urllib.parse.unquote(u)
+        p = urllib.parse.urlparse(u)
+        if p.scheme and p.netloc:
+            out = p.path or "/ui/search"
+            if p.query:
+                out += "?" + p.query
+            return out
+        if u.startswith("/"):
+            return u
+        return "/ui/search"
+
+    async def _hyp_link_for_group(group_id: str | None):
+        if not group_id:
+            return None
+        # 1) Try the API (works when Document exists in Postgres)
+        try:
+            return await asgi_get(request, "/hypothesis/link",
+                                  params={"document_id": document_id, "group_id": group_id})
+        except Exception:
+            pass
+
+        # 2) Fallback: build from canonical_url in Solr
+        cu = doc.get("canonical_url_s")
+        if isinstance(cu, list):
+            cu = cu[0] if cu else None
+        cu = (cu or "").strip()
+        if not cu:
+            return None
+        return {"hypothesis_incontext": build_hypothesis_incontext(cu, group_id)}
 
     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
     if not core:
@@ -1279,13 +1373,24 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
     docs = doc_res.get("docs", []) or []
     doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
 
-    # # ✅ Fast membership check using Solr field on this doc
-    # in_project = False
-    # if project_id:
-    #     pids = doc.get("project_ids_ss") or []
-    #     if isinstance(pids, str):
-    #         pids = [pids]
-    #     in_project = str(project_id) in set(str(x) for x in pids if x)
+    MODEL_GID = (os.getenv("HYP_GROUP_MODEL") or "BXp1QL5v").strip()
+    GOLD_GID = (os.getenv("HYP_GROUP_GOLD") or "K48VWwNg").strip()
+  # set this in env
+
+    # find user workspace group id
+    db = SessionLocal()
+    try:
+        uid = user.get("id") or user.get("user_id") or user.get("sub")
+        w = db.get(UserHypothesisWorkspace, str(uid)) if uid else None
+        WORK_GID = w.group_id if w else None
+    finally:
+        db.close()
+
+
+    # build hypothesis links (only if doc_id exists)
+    hyp_model = await _hyp_link_for_group(MODEL_GID)
+    hyp_gold = await _hyp_link_for_group(GOLD_GID)
+    hyp_mine = await _hyp_link_for_group(WORK_GID)
 
     # ✅ Fast membership check using Postgres (authoritative + instant)
     # ✅ Membership check via Postgres (authoritative + immediate)
@@ -1322,24 +1427,6 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
 
     codes_view, code_stats = build_codes_view(doc)
 
-    def _normalize_back_url(u: str | None) -> str:
-        """
-        Accepts encoded relative or absolute URLs.
-        Returns a safe relative path + query.
-        """
-        if not u:
-            return ""
-        u = urllib.parse.unquote(u)
-        p = urllib.parse.urlparse(u)
-        if p.scheme and p.netloc:
-            out = p.path or "/ui/search"
-            if p.query:
-                out += "?" + p.query
-            return out
-        if u.startswith("/"):
-            return u
-        return "/ui/search"
-
     back_url_raw = request.query_params.get("back_url") or request.headers.get("referer")
     back_url = _normalize_back_url(back_url_raw) or f"/ui/search?core={core}"
 
@@ -1362,6 +1449,10 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
             "return_to": return_to,
             "codes_view": codes_view,
             "code_stats": code_stats,
+            "hyp_model": hyp_model,
+            "hyp_gold": hyp_gold,
+            "hyp_mine": hyp_mine,
+            "workspace_group_id": WORK_GID,
         },
     )
 
@@ -1521,3 +1612,165 @@ async def ui_create_project(
 #
 #
 #
+@router.get("/settings/hypothesis", response_class=HTMLResponse)
+async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_user)):
+    groups_res = await asgi_get(request, "/hypothesis/groups", params={})
+    workspace_res = await asgi_get(request, "/hypothesis/workspace", params={})
+
+    groups = groups_res.get("groups", []) or []
+    current_gid = workspace_res.get("group_id")
+
+    # (optional) hide public
+    groups = [g for g in groups if not g.get("is_public")]
+
+    return request.app.state.templates.TemplateResponse(
+        "hypothesis_settings.html",
+        {
+            "request": request,
+            "user": user,
+            "groups": groups,
+            "current_gid": current_gid,
+        },
+    )
+
+
+@router.post("/settings/hypothesis")
+async def ui_hypothesis_settings_save(
+    request: Request,
+    group_id: str = Form(...),
+    user=Depends(require_paid_user),
+):
+    gid = (group_id or "").strip()
+    await asgi_post_json(request, "/hypothesis/workspace", {"group_id": gid})
+    return RedirectResponse("/ui/settings/hypothesis?msg=saved", status_code=303)
+
+@router.get("/hypothesis/access", response_class=HTMLResponse)
+async def ui_hypothesis_access(request: Request, user=Depends(require_user)):
+    import os
+
+    model_gid = (os.getenv("HYP_GROUP_MODEL") or "BXp1QL5v").strip()
+    gold_gid = (os.getenv("HYP_GROUP_GOLD") or "K48VWwNg").strip()
+
+    # direct group pages (work even without a document URL)
+    model_group_url = f"https://hypothes.is/groups/{model_gid}/model-predictions"
+    gold_group_url = f"https://hypothes.is/groups/{gold_gid}/gold-annotations"
+
+    # workspace selection page you added earlier
+    workspace_settings_url = "/ui/settings/hypothesis"
+
+    return request.app.state.templates.TemplateResponse(
+        "hypothesis_access.html",
+        {
+            "request": request,
+            "user": user,
+            "model_gid": model_gid,
+            "gold_gid": gold_gid,
+            "model_group_url": model_group_url,
+            "gold_group_url": gold_group_url,
+            "workspace_settings_url": workspace_settings_url,
+        },
+    )
+
+@router.get("/projects", response_class=HTMLResponse)
+async def ui_projects_page(
+    request: Request,
+    project_id: str | None = None,
+    user=Depends(require_paid_user),
+):
+    projects_res = await asgi_get(request, "/projects", params={})
+    projects = projects_res.get("projects", []) or []
+
+    selected_project_id = project_id or _get_project_id(request)
+    selected_project_name = _get_project_name(request)
+
+    active_project = None
+    project_documents = []
+
+    if selected_project_id:
+        try:
+            active_project = await asgi_get(request, f"/projects/{selected_project_id}", params={})
+            docs_res = await asgi_get(
+                request,
+                f"/projects/{selected_project_id}/documents",
+                params={"limit": 200, "offset": 0},
+            )
+            # project_documents = docs_res.get("document_ids", []) or []
+            project_documents = docs_res.get("documents", []) or []
+            if active_project.get("name"):
+                selected_project_name = active_project.get("name")
+        except Exception:
+            active_project = None
+            project_documents = []
+
+    return request.app.state.templates.TemplateResponse(
+        "projects.html",
+        {
+            "request": request,
+            "user": user,
+            "projects": projects,
+            "selected_project_id": selected_project_id,
+            "selected_project_name": selected_project_name,
+            "active_project": active_project,
+            "project_documents": project_documents,
+            "message": request.query_params.get("msg"),
+        },
+    )
+
+
+@router.post("/projects/use")
+async def ui_projects_use(
+    request: Request,
+    project_id: str = Form(...),
+    user=Depends(require_paid_user),
+):
+    proj = await asgi_get(request, f"/projects/{project_id}", params={})
+    _set_project_id(request, project_id)
+    _set_project_name(request, proj.get("name"))
+    _set_run_id(request, None)
+    return RedirectResponse(
+        f"/ui/projects?project_id={project_id}&msg=Project%20selected",
+        status_code=303,
+    )
+
+
+
+
+@router.post("/projects/update")
+async def ui_projects_update(
+    request: Request,
+    project_id: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    user=Depends(require_paid_user),
+):
+    name_clean = (name or "").strip()
+    desc = (description or "").strip()
+
+    if not name_clean:
+        return RedirectResponse(
+            f"/ui/projects?project_id={project_id}&msg=Project%20name%20is%20required",
+            status_code=303,
+        )
+
+    if len(desc) > 1000:
+        return RedirectResponse(
+            f"/ui/projects?project_id={project_id}&msg=Description%20must%20be%201000%20characters%20or%20less",
+            status_code=303,
+        )
+
+    updated = await asgi_patch(
+        request,
+        f"/projects/{project_id}",
+        {
+            "name": name_clean,
+            "description": desc,
+        },
+    )
+
+    _set_project_name(request, updated.get("name") or name_clean)
+
+    return RedirectResponse(
+        f"/ui/projects?project_id={project_id}&msg=Project%20updated",
+        status_code=303,
+    )
+

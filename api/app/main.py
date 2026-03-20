@@ -57,7 +57,7 @@ from .db import SessionLocal
 from .init_db import init
 from .models import (
     Team, Project, Document, ProjectDocument,
-    HypothesisGroup, HypothesisAnnotation,
+    HypothesisGroup, HypothesisAnnotation, UserHypothesisWorkspace,
     Code, CodeAlias, ProjectDocumentReview, TopicRun, DocumentTopic, DocEmbedding,
 )
 
@@ -1717,6 +1717,18 @@ def create_project_bootstrap(payload: CreateProjectIn, request: Request):
         # -----------------------------
         # Create project
         # -----------------------------
+        name_clean = (payload.name or "Untitled Project").strip()
+        desc_clean = (payload.description or "").strip() or None
+
+        existing = db.execute(
+            select(Project)
+            .where(Project.team_id == team.team_id)
+            .where(func.lower(Project.name) == name_clean.lower())
+        ).scalars().first()
+
+        if existing:
+            raise HTTPException(400, "A project with this name already exists for this team")
+
         proj = Project(
             project_id=uuid.uuid4(),
             team_id=team.team_id,
@@ -3245,11 +3257,20 @@ def export_csv_wide(
     code: Optional[str] = None,
     version: str = "all",
     metric: str = "value",
+    column_order: str = "project_document_url",
 ):
     if version not in {"v1", "ext", "all"}:
         raise HTTPException(400, "version must be v1|ext|all")
     if metric not in {"value", "count", "binary"}:
         raise HTTPException(400, "metric must be value|count|binary")
+    allowed_column_orders = {
+        "project_document_url": ["project_id", "document_id", "canonical_url"],
+        "document_project_url": ["document_id", "project_id", "canonical_url"],
+        "document_url_project": ["document_id", "canonical_url", "project_id"],
+        "url_document_project": ["canonical_url", "document_id", "project_id"],
+    }
+    if column_order not in allowed_column_orders:
+        raise HTTPException(400, "column_order is invalid")
 
     uid = current_user_id(request)
 
@@ -3284,7 +3305,8 @@ def export_csv_wide(
             codes_seen = set()
 
         code_cols = sorted([csv_safe_col(c) for c in codes_seen])
-        headers = ["project_id", "document_id", "canonical_url"] + code_cols
+        base_cols = allowed_column_orders[column_order]
+        headers = base_cols + code_cols
         codes_sorted = sorted(list(codes_seen))
 
         def gen():
@@ -3346,22 +3368,44 @@ def create_team(payload: TeamCreateRequest):
         db.close()
 
 
+
 # @app.post("/projects")
-# def create_project(payload: ProjectCreateRequest):
+# def create_project(payload: ProjectCreateRequest, request: Request):
+#     user = get_current_user(request)
+#     user_id = user.get("id")
+#     if not user_id:
+#         raise HTTPException(500, detail="Session user id missing")
+#
 #     db = SessionLocal()
 #     try:
 #         team = db.get(Team, payload.team_id)
 #         if not team:
 #             raise HTTPException(404, "team not found")
 #
-#         p = Project(project_id=uuid.uuid4(),
-#                     team_id=payload.team_id, name=payload.name.strip(),
-#                     description=(payload.description or "").strip() or None,)
+#         p = Project(
+#             project_id=uuid.uuid4(),
+#             team_id=payload.team_id,
+#             name=payload.name.strip(),
+#             description=(payload.description or "").strip() or None,
+#         )
 #         db.add(p)
 #         db.commit()
+#         db.refresh(p)
+#
+#         db.execute(
+#             text("""
+#                 INSERT INTO project_members (project_id, user_id, role)
+#                 VALUES (:pid, :uid, 'owner')
+#                 ON CONFLICT (project_id, user_id) DO NOTHING
+#             """),
+#             {"pid": str(p.project_id), "uid": str(user_id)},
+#         )
+#         db.commit()
+#
 #         return {"ok": True, "project_id": str(p.project_id), "team_id": str(p.team_id), "name": p.name, "description": p.description}
 #     finally:
 #         db.close()
+
 
 @app.post("/projects")
 def create_project(payload: ProjectCreateRequest, request: Request):
@@ -3376,11 +3420,26 @@ def create_project(payload: ProjectCreateRequest, request: Request):
         if not team:
             raise HTTPException(404, "team not found")
 
+        name_clean = (payload.name or "").strip()
+        desc_clean = (payload.description or "").strip() or None
+
+        if not name_clean:
+            raise HTTPException(400, "Project name is required")
+
+        existing = db.execute(
+            select(Project)
+            .where(Project.team_id == payload.team_id)
+            .where(func.lower(Project.name) == name_clean.lower())
+        ).scalars().first()
+
+        if existing:
+            raise HTTPException(400, "A project with this name already exists for this team")
+
         p = Project(
             project_id=uuid.uuid4(),
             team_id=payload.team_id,
-            name=payload.name.strip(),
-            description=(payload.description or "").strip() or None,
+            name=name_clean,
+            description=desc_clean,
         )
         db.add(p)
         db.commit()
@@ -3396,41 +3455,15 @@ def create_project(payload: ProjectCreateRequest, request: Request):
         )
         db.commit()
 
-        return {"ok": True, "project_id": str(p.project_id), "team_id": str(p.team_id), "name": p.name, "description": p.description}
+        return {
+            "ok": True,
+            "project_id": str(p.project_id),
+            "team_id": str(p.team_id),
+            "name": p.name,
+            "description": p.description,
+        }
     finally:
         db.close()
-
-
-# @app.get("/projects")
-# def list_projects(request: Request, team_id: UUID | None = None):
-#     uid = current_user_id(request)
-#
-#     db = SessionLocal()
-#     try:
-#         stmt = (
-#             select(Project)
-#             .join(text("project_members pm"), text("pm.project_id = projects.project_id"))
-#             .where(text("pm.user_id = :uid"))
-#         )
-#
-#         if team_id:
-#             stmt = stmt.where(Project.team_id == team_id)
-#
-#         projects = db.execute(stmt.params(uid=str(uid))).scalars().all()
-#
-#         return {
-#             "projects": [
-#                 {
-#                     "project_id": str(p.project_id),
-#                     "team_id": str(p.team_id),
-#                     "name": p.name,
-#                     "description": p.description,
-#                 }
-#                 for p in projects
-#             ]
-#         }
-#     finally:
-#         db.close()
 
 @app.get("/projects")
 def list_projects(request: Request, team_id: UUID | None = None):
@@ -3472,38 +3505,38 @@ def list_projects(request: Request, team_id: UUID | None = None):
         db.close()
 
 
-@app.get("/projects/{project_id}")
-def get_project(project_id: UUID, request: Request):
-    uid = current_user_id(request)
-
-    db = SessionLocal()
-    try:
-        assert_project_member(db, project_id, uid)
-
-        p = db.get(Project, project_id)
-        if not p:
-            raise HTTPException(404, "project not found")
-
-        n_docs = db.execute(
-            select(func.count()).select_from(ProjectDocument).where(ProjectDocument.project_id == project_id)
-        ).scalar_one()
-
-        n_docs_with_ann = db.execute(
-            select(func.count(func.distinct(HypothesisAnnotation.document_id)))
-            .select_from(HypothesisAnnotation)
-            .join(ProjectDocument, ProjectDocument.document_id == HypothesisAnnotation.document_id)
-            .where(ProjectDocument.project_id == project_id)
-        ).scalar_one()
-
-        return {
-            "project_id": str(p.project_id),
-            "team_id": str(p.team_id),
-            "name": p.name,
-            "documents_total": int(n_docs),
-            "documents_with_human_annotations": int(n_docs_with_ann),
-        }
-    finally:
-        db.close()
+# @app.get("/projects/{project_id}")
+# def get_project(project_id: UUID, request: Request):
+#     uid = current_user_id(request)
+#
+#     db = SessionLocal()
+#     try:
+#         assert_project_member(db, project_id, uid)
+#
+#         p = db.get(Project, project_id)
+#         if not p:
+#             raise HTTPException(404, "project not found")
+#
+#         n_docs = db.execute(
+#             select(func.count()).select_from(ProjectDocument).where(ProjectDocument.project_id == project_id)
+#         ).scalar_one()
+#
+#         n_docs_with_ann = db.execute(
+#             select(func.count(func.distinct(HypothesisAnnotation.document_id)))
+#             .select_from(HypothesisAnnotation)
+#             .join(ProjectDocument, ProjectDocument.document_id == HypothesisAnnotation.document_id)
+#             .where(ProjectDocument.project_id == project_id)
+#         ).scalar_one()
+#
+#         return {
+#             "project_id": str(p.project_id),
+#             "team_id": str(p.team_id),
+#             "name": p.name,
+#             "documents_total": int(n_docs),
+#             "documents_with_human_annotations": int(n_docs_with_ann),
+#         }
+#     finally:
+#         db.close()
 
 
 from fastapi import BackgroundTasks
@@ -3604,33 +3637,33 @@ def add_documents_to_project(
 
 
 
-@app.get("/projects/{project_id}/documents")
-def list_project_documents(project_id: UUID, request: Request, limit: int = 50, offset: int = 0):
-    uid = current_user_id(request)
-
-    db = SessionLocal()
-    try:
-        assert_project_member(db, project_id, uid)
-
-        p = db.get(Project, project_id)
-        if not p:
-            raise HTTPException(404, "project not found")
-
-        rows = db.execute(
-            select(ProjectDocument.document_id)
-            .where(ProjectDocument.project_id == project_id)
-            .order_by(ProjectDocument.document_id)
-            .limit(limit)
-            .offset(offset)
-        ).scalars().all()
-
-        return {"project_id": str(project_id), "document_ids": rows, "limit": limit, "offset": offset}
-    finally:
-        db.close()
+# @app.get("/projects/{project_id}/documents")
+# def list_project_documents(project_id: UUID, request: Request, limit: int = 50, offset: int = 0):
+#     uid = current_user_id(request)
+#
+#     db = SessionLocal()
+#     try:
+#         assert_project_member(db, project_id, uid)
+#
+#         p = db.get(Project, project_id)
+#         if not p:
+#             raise HTTPException(404, "project not found")
+#
+#         rows = db.execute(
+#             select(ProjectDocument.document_id)
+#             .where(ProjectDocument.project_id == project_id)
+#             .order_by(ProjectDocument.document_id)
+#             .limit(limit)
+#             .offset(offset)
+#         ).scalars().all()
+#
+#         return {"project_id": str(project_id), "document_ids": rows, "limit": limit, "offset": offset}
+#     finally:
+#         db.close()
 
 
 #################################################################
-# SEARCH and SAMOKE
+# SEARCH and SMOKE
 #################################################################
 
 from typing import Any, Dict, List, Optional, Union
@@ -3799,8 +3832,28 @@ def search(
         doc["canonical_url_s"] = cu
 
         if include_hypothesis_links and cu:
-            gid = group_id or "__world__"
+            # gid = group_id or "__world__"
+            gid = group_id
+
+            if not gid:
+                # env override first
+                gid = os.getenv("HYPOTHESIS_MODEL_GROUP_ID")
+
+            if not gid:
+                # fall back to first enabled group in DB
+                db = SessionLocal()
+                try:
+                    g = db.execute(
+                        select(HypothesisGroup)
+                        .where(HypothesisGroup.is_enabled == True)
+                        .order_by(HypothesisGroup.group_id.asc())
+                    ).scalars().first()
+                    gid = g.group_id if g else "__world__"
+                finally:
+                    db.close()
+
             doc["hypothesis_incontext"] = build_hypothesis_incontext(cu, gid)
+            # doc["hypothesis_incontext"] = build_hypothesis_incontext(cu, gid)
 
         out_docs.append(doc)
 
@@ -5479,3 +5532,127 @@ def assert_topic_run_owner(db, run_id: UUID, user_id: str, actor: str | None = N
 
 
 
+@app.get("/hypothesis/workspace")
+def get_my_hypothesis_workspace(request: Request):
+    uid = current_user_id(request)  # uses session user.id :contentReference[oaicite:2]{index=2}
+    db = SessionLocal()
+    try:
+        row = db.get(UserHypothesisWorkspace, uid)
+        return {"ok": True, "user_id": uid, "group_id": (row.group_id if row else None)}
+    finally:
+        db.close()
+
+
+class WorkspaceSetIn(BaseModel):
+    group_id: str
+
+
+@app.post("/hypothesis/workspace")
+def set_my_hypothesis_workspace(payload: WorkspaceSetIn, request: Request):
+    uid = current_user_id(request)
+    gid = (payload.group_id or "").strip()
+    if not gid:
+        raise HTTPException(status_code=400, detail="group_id is required")
+
+    db = SessionLocal()
+    try:
+        # ensure group exists + enabled (matches /hypothesis/groups behavior) :contentReference[oaicite:3]{index=3}
+        g = db.get(HypothesisGroup, gid)
+        if not g or not getattr(g, "is_enabled", True):
+            raise HTTPException(status_code=400, detail="Unknown or disabled group_id")
+
+        row = db.get(UserHypothesisWorkspace, uid)
+        if row:
+            row.group_id = gid
+        else:
+            db.add(UserHypothesisWorkspace(user_id=uid, group_id=gid))
+
+        db.commit()
+        return {"ok": True, "user_id": uid, "group_id": gid}
+    finally:
+        db.close()
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str
+    description: str | None = None
+
+
+@app.get("/projects/{project_id}/documents")
+def list_project_documents(project_id: UUID, request: Request, limit: int = 50, offset: int = 0):
+    uid = current_user_id(request)
+
+    db = SessionLocal()
+    try:
+        assert_project_member(db, project_id, uid)
+
+        p = db.get(Project, project_id)
+        if not p:
+            raise HTTPException(404, "project not found")
+
+        rows = (
+            db.execute(
+                select(
+                    Document.document_id,
+                    Document.title,
+                    Document.published_date,
+                )
+                .select_from(ProjectDocument)
+                .join(Document, Document.document_id == ProjectDocument.document_id)
+                .where(ProjectDocument.project_id == project_id)
+                .order_by(Document.title.asc(), Document.document_id.asc())
+                .limit(limit)
+                .offset(offset)
+            )
+            .all()
+        )
+
+        return {
+            "project_id": str(project_id),
+            "documents": [
+                {
+                    "document_id": document_id,
+                    "title": title,
+                    "published_date": str(published_date) if published_date else None,
+                }
+                for document_id, title, published_date in rows
+            ],
+            "limit": limit,
+            "offset": offset,
+        }
+    finally:
+        db.close()
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: UUID, request: Request):
+    uid = current_user_id(request)
+
+    db = SessionLocal()
+    try:
+        assert_project_member(db, project_id, uid)
+
+        p = db.get(Project, project_id)
+        if not p:
+            raise HTTPException(404, "project not found")
+
+        n_docs = db.execute(
+            select(func.count()).select_from(ProjectDocument).where(ProjectDocument.project_id == project_id)
+        ).scalar_one()
+
+        n_docs_with_ann = db.execute(
+            select(func.count(func.distinct(HypothesisAnnotation.document_id)))
+            .select_from(HypothesisAnnotation)
+            .join(ProjectDocument, ProjectDocument.document_id == HypothesisAnnotation.document_id)
+            .where(ProjectDocument.project_id == project_id)
+        ).scalar_one()
+
+        return {
+            "project_id": str(p.project_id),
+            "team_id": str(p.team_id),
+            "name": p.name,
+            "description": p.description,
+            "documents_total": int(n_docs),
+            "documents_with_human_annotations": int(n_docs_with_ann),
+        }
+    finally:
+        db.close()

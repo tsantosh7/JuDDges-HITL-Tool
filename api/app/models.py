@@ -22,7 +22,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from pydantic import BaseModel, Field
-
+from sqlalchemy.orm import relationship
 from .db import Base
 
 
@@ -115,6 +115,19 @@ class HypothesisAnnotation(Base):
 
     group = relationship("HypothesisGroup")
     document = relationship("Document", back_populates="hypothesis_annotations")
+
+
+
+class UserHypothesisWorkspace(Base):
+    __tablename__ = "user_hypothesis_workspaces"
+
+    user_id = Column(String, primary_key=True)  # same shape as session user.id (string UUID)
+    group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), nullable=False)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = relationship("HypothesisGroup")
 
 class Code(Base):
     """

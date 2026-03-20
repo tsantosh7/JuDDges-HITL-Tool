@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+<h1>Opened Document</h1>
 
 {# ---------- Helpers: handle Solr fields that can be str OR list ---------- #}
 {% set doc_id = doc.get("document_id_s") or "" %}
@@ -55,10 +56,104 @@
   <div class="alert">✅ Added to project.</div>
 {% endif %}
 
-<div class="row" style="align-items:center; justify-content:space-between;">
-  <div>
-    <h1 class="mono" style="margin-bottom:4px;">{{ doc_id[:8] }}</h1>
-    <div class="muted" style="font-size: 12px;">
+{#<div class="row" style="align-items:center; justify-content:space-between;">#}
+{#  <div>#}
+{#    <h1 class="mono" style="margin-bottom:4px;">{{ doc_id[:8] }}</h1>#}
+{#    <div class="muted" style="font-size: 12px;">#}
+{#      Document ID hidden (shows first 8 chars).&nbsp;#}
+{#      <button#}
+{#        type="button"#}
+{#        onclick="navigator.clipboard.writeText('{{ doc_id }}')"#}
+{#        style="border:0; background:none; padding:0; cursor:pointer; text-decoration:underline; color:inherit;"#}
+{#      >#}
+{#        Copy full ID#}
+{#      </button>#}
+{#    </div>#}
+{#  </div>#}
+{##}
+{#{% set _hm = doc.get("has_model_b") %}#}
+{#{% set has_model = (_hm[0] if _hm is iterable and _hm is not string else _hm) or false %}#}
+{##}
+{#{% set _hh = doc.get("has_human_b") %}#}
+{#{% set has_human = (_hh[0] if _hh is iterable and _hh is not string else _hh) or false %}#}
+{##}
+{#  <div class="row" style="gap:10px;">#}
+{#    {% if canonical_url %}#}
+{#      <a class="btnlink" href="{{ canonical_url }}" target="_blank" rel="noopener">Open original</a>#}
+{#    {% else %}#}
+{#      <span class="muted">No canonical URL</span>#}
+{#    {% endif %}#}
+{#    {% if not in_project %}#}
+{#  <form method="post" action="/ui/projects/add_one">#}
+{#  <input type="hidden" name="document_id" value="{{ doc_id }}">#}
+{#  <input type="hidden" name="next" value="{{ return_to }}">#}
+{#  <button type="submit" class="btnlink">Add to Project</button>#}
+{#</form>#}
+{##}
+{#{% else %}#}
+{#  <span class="pill">In project</span>#}
+{#{% endif %}#}
+{##}
+{##}
+{#    <a class="btnlink" href="{{ back_href }}">Back to Search</a>#}
+{#  <a class="btnlink" href="{{ back_url }}">← Back to search</a>#}
+{##}
+{#  </div>#}
+{#</div>#}
+{##}
+{#    {% if canonical_url %}#}
+{#  <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:10px;">#}
+    {# Model predictions #}
+{#    {% if has_model and hyp_model and hyp_model.hypothesis_incontext %}#}
+{#      <a class="btnlink" href="{{ hyp_model.hypothesis_incontext }}" target="_blank" rel="noopener">#}
+{#        Open Model Predictions (Hypothesis)#}
+{#      </a>#}
+{#    {% else %}#}
+{#      <span class="muted">No model annotations yet</span>#}
+{#    {% endif %}#}
+{##}
+    {# Gold (B1): only show when exists #}
+{#    {% if has_human and hyp_gold and hyp_gold.hypothesis_incontext %}#}
+{#      <a class="btnlink" href="{{ hyp_gold.hypothesis_incontext }}" target="_blank" rel="noopener">#}
+{#        Open Gold Annotations (Hypothesis)#}
+{#      </a>#}
+{#    {% endif %}#}
+{##}
+    {# My workspace #}
+{#    {% if hyp_mine and hyp_mine.hypothesis_incontext %}#}
+{#      <a class="btnlink" href="{{ hyp_mine.hypothesis_incontext }}" target="_blank" rel="noopener">#}
+{#        Open My Annotations (Hypothesis)#}
+{#      </a>#}
+{#    {% else %}#}
+{#      <span class="muted">Workspace not set</span>#}
+{#      <a class="btnlink" href="/ui/settings/hypothesis">Set workspace</a>#}
+{#    {% endif %}#}
+{##}
+{#    <a class="btnlink" href="/ui/settings/hypothesis">Hypothesis workspace</a>#}
+{#  <a class="btnlink" href="/ui/hypothesis/access">Fix Hypothesis access</a>#}
+{##}
+{#  </div>#}
+{##}
+{#{% else %}#}
+{#  <div class="muted" style="margin-top:10px;">#}
+{#    No canonical URL — can’t open Hypothesis for this document.#}
+{#  </div>#}
+{#{% endif %}#}
+
+{# ---------------- Header + Annotation Actions ---------------- #}
+
+{% set _hm = doc.get("has_model_b") %}
+{% set has_model = (_hm[0] if _hm is iterable and _hm is not string else _hm) or false %}
+
+{% set _hh = doc.get("has_human_b") %}
+{% set has_human = (_hh[0] if _hh is iterable and _hh is not string else _hh) or false %}
+
+<div class="row" style="align-items:flex-start; justify-content:space-between; gap:20px; flex-wrap:wrap;">
+
+  <!-- LEFT: Document Info -->
+  <div style="min-width:260px;">
+    <h1 class="mono" style="margin:0 0 4px 0;">{{ doc_id[:8] }}</h1>
+    <div class="muted" style="font-size:12px;">
       Document ID hidden (shows first 8 chars).&nbsp;
       <button
         type="button"
@@ -68,30 +163,96 @@
         Copy full ID
       </button>
     </div>
+
+    <h2 style="margin:12px 0 0 0;">
+      {{ title if title else "(no title)" }}
+    </h2>
+
+    <div class="meta" style="margin-top:8px;">
+      {% if source %}<span class="pill">source: {{ source }}</span>{% endif %}
+      {% if doc_type %}<span class="pill">type: {{ doc_type }}</span>{% endif %}
+      {% if published %}<span class="pill">published: <span class="mono">{{ published }}</span></span>{% endif %}
+    </div>
   </div>
 
-  <div class="row" style="gap:10px;">
-    {% if canonical_url %}
-      <a class="btnlink" href="{{ canonical_url }}" target="_blank" rel="noopener">Open original</a>
+  <!-- RIGHT: Annotation Controls -->
+  <div style="min-width:280px; flex:1; max-width:520px;">
+
+    {% if canonical_url and hyp_model and hyp_model.hypothesis_incontext %}
+      <div class="card" style="margin:0; padding:14px;">
+        <div class="muted" style="font-size:12px; margin-bottom:6px;">Annotations</div>
+
+        <div class="row" style="gap:10px; flex-wrap:wrap;">
+          <a class="btnlink"
+             href="{{ hyp_model.hypothesis_incontext }}"
+             target="_blank"
+             rel="noopener"
+             style="font-weight:600;">
+            Open Model Annotations
+          </a>
+
+          {% if has_human and hyp_gold and hyp_gold.hypothesis_incontext %}
+            <a class="btnlink"
+               href="{{ hyp_gold.hypothesis_incontext }}"
+               target="_blank"
+               rel="noopener">
+              Gold
+            </a>
+          {% endif %}
+
+          {% if hyp_mine and hyp_mine.hypothesis_incontext %}
+            <a class="btnlink"
+               href="{{ hyp_mine.hypothesis_incontext }}"
+               target="_blank"
+               rel="noopener">
+              My Annotations
+            </a>
+          {% else %}
+            <a class="btnlink" href="/ui/settings/hypothesis">
+              Set My Workspace
+            </a>
+          {% endif %}
+
+          <a class="btnlink" href="/ui/hypothesis/access">
+            Fix access
+          </a>
+        </div>
+
+        {% if not has_model %}
+          <div class="muted" style="font-size:12px; margin-top:8px;">
+            No model predictions available yet.
+          </div>
+        {% endif %}
+      </div>
     {% else %}
-      <span class="muted">No canonical URL</span>
+      <div class="card" style="margin:0; padding:14px;">
+        <div class="muted">
+          This document cannot be opened in Hypothesis.
+        </div>
+        <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:10px;">
+          <a class="btnlink" href="/ui/hypothesis/access">Fix access</a>
+          <a class="btnlink" href="/ui/settings/hypothesis">Set My Workspace</a>
+        </div>
+      </div>
     {% endif %}
-    {% if not in_project %}
-  <form method="post" action="/ui/projects/add_one">
-  <input type="hidden" name="document_id" value="{{ doc_id }}">
-  <input type="hidden" name="next" value="{{ return_to }}">
-  <button type="submit" class="btnlink">Add to Project</button>
-</form>
 
-{% else %}
-  <span class="pill">In project</span>
-{% endif %}
+    <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:12px; justify-content:flex-end;">
+      {% if not in_project %}
+        <form method="post" action="/ui/projects/add_one" style="margin:0;">
+          <input type="hidden" name="document_id" value="{{ doc_id }}">
+          <input type="hidden" name="next" value="{{ return_to }}">
+          <button type="submit" class="btnlink">Add to Project</button>
+        </form>
+      {% else %}
+        <span class="pill">In project</span>
+      {% endif %}
 
-{#    <a class="btnlink" href="{{ back_href }}">Back to Search</a>#}
-  <a class="btnlink" href="{{ back_url }}">← Back to search</a>
+      <a class="btnlink" href="{{ back_url }}">← Back to search</a>
+    </div>
 
   </div>
 </div>
+
 
 <h2 style="margin-top:10px;">
   {{ title if title else "(no title)" }}
@@ -110,117 +271,6 @@
     <p>{{ excerpt }}</p>
   </div>
 {% endif %}
-
-<div class="card">
-  <h3>Topics (HITL)</h3>
-    {% if not run_id %}
-      <div class="muted" style="font-size:12px; margin: 6px 0 10px 0;">
-        No active topic run is set. Actions will try to use the active run automatically; if none exists, you’ll be prompted to create/activate one.
-      </div>
-    {% endif %}
-  {# ---------------- Manual add: label only (no topic_key) ---------------- #}
-{#  {% if user.role in ["admin", "reviewer"] %}#}
-    <div class="card" style="margin: 10px 0 14px 0;">
-      <h4 style="margin:0 0 8px 0;">Add / Accept topic</h4>
-      <div class="muted" style="font-size:12px; margin-bottom:8px;">
-        Type a topic name (e.g., “Sentencing”, “Evidence”, “Appeal outcome”). The system will assign an internal key automatically.
-      </div>
-
-      <form method="post" action="/ui/topics/accept" class="row" style="gap:10px; align-items:end;">
-        <input type="hidden" name="document_id" value="{{ doc_id }}">
-        <input type="hidden" name="run_id" value="{{ run_id or '' }}">
-
-        <div class="grow">
-          <label class="muted">Topic name</label>
-          <input class="grow" name="topic_label" placeholder="e.g., Sentencing" required>
-        </div>
-
-        {# DO NOT send topic_key; backend will generate deterministically from label #}
-        <button type="submit" class="btnlink">Add Topic</button>
-      </form>
-    </div>
-{#  {% endif %}#}
-
-  {% if not topics or topics|length == 0 %}
-    <div class="muted">No topics found for this document.</div>
-  {% else %}
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Topic</th>
-          <th>Score</th>
-          <th>Source</th>
-          <th>Status</th>
-          <th>Updated</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-
-      <tbody>
-      {% for t in topics %}
-        {% set src = t.get("source") if t is mapping else t.source %}
-        {% set lbl = t.get("topic_label") if t is mapping else t.topic_label %}
-        {% set key = t.get("topic_key") if t is mapping else t.topic_key %}
-        {% set sc  = t.get("score") if t is mapping else t.score %}
-        {% set upd = t.get("updated_at") if t is mapping else t.updated_at %}
-        {% set at  = (t.get("assignment_type") if t is mapping else t.assignment_type) %}
-        {% set st  = (t.get("status") if t is mapping else t.status) %}
-
-        <tr>
-          <td><strong>{{ lbl }}</strong></td>
-          <td class="mono">{{ "%.2f"|format(sc or 0) }}</td>
-          <td><span class="pill">{{ src }}</span></td>
-          <td class="mono">{{ (st or "") }}</td>
-          <td class="mono">{{ upd or "" }}</td>
-
-          <td class="actions">
-  {# Accept/Reject for suggestions (non-human, active) #}
-{#  {% if user.role in ["admin", "reviewer"] and (st not in ["deleted", "rejected"]) and (at != "human") %}#}
-    {% if (st not in ["deleted", "rejected"]) and (at != "human") %}
-
-    {# Accept: convert the existing suggestion into a human label (no typing) #}
-    <form method="post" action="/ui/topics/accept" style="display:inline;">
-      <input type="hidden" name="document_id" value="{{ doc_id }}">
-      <input type="hidden" name="run_id" value="{{ run_id or '' }}">
-      <input type="hidden" name="topic_label" value="{{ lbl }}">
-       <button type="submit" class="btnlink">Accept</button>
-    </form>
-
-    {# Reject: hide the suggestion #}
-    <form method="post" action="/ui/topics/reject" style="display:inline;" onsubmit="return confirm('Reject this suggested topic?');">
-      <input type="hidden" name="document_id" value="{{ doc_id }}">
-      <input type="hidden" name="topic_key" value="{{ key }}">
-      <input type="hidden" name="run_id" value="{{ run_id or '' }}">
-      <button class="btnlink danger" type="submit" >Reject</button>
-    </form>
-  {% endif %}
-
-  {# Remove only for ACTIVE human labels #}
-{#  {% if user.role in ["admin", "reviewer"] and at == "human" and st == "active" %}#}
-      {% if at == "human" and st == "active" %}
-    <form method="post" action="/ui/topics/delete" style="display:inline;" onsubmit="return confirm('Remove this topic label from this document?');">
-      <input type="hidden" name="document_id" value="{{ doc_id }}">
-      <input type="hidden" name="topic_key" value="{{ key }}">
-      <input type="hidden" name="run_id" value="{{ run_id or '' }}">
-      <button class="btnlink warn" type="submit">Remove</button>
-    </form>
-  {% endif %}
-
-  {% if st in ["deleted", "rejected"] %}
-    <span class="muted">({{ st }})</span>
-  {% endif %}
-</td>
-
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-
-    <div class="muted" style="font-size:12px; margin-top:10px;">
-      Tip: “Accept” converts a suggestion into a human topic label (so it propagates). “Reject” hides that suggestion.
-    </div>
-  {% endif %}
-</div>
 
 <div class="card">
   <h3>Codes (Extracted Values)</h3>
@@ -331,6 +381,119 @@
       {% endfor %}
       </tbody>
     </table>
+  {% endif %}
+</div>
+
+
+
+<div class="card">
+  <h3>Topics (HITL)</h3>
+    {% if not run_id %}
+      <div class="muted" style="font-size:12px; margin: 6px 0 10px 0;">
+        No active topic run is set. Actions will try to use the active run automatically; if none exists, you’ll be prompted to create/activate one.
+      </div>
+    {% endif %}
+  {# ---------------- Manual add: label only (no topic_key) ---------------- #}
+{#  {% if user.role in ["admin", "reviewer"] %}#}
+    <div class="card" style="margin: 10px 0 14px 0;">
+      <h4 style="margin:0 0 8px 0;">Add / Accept topic</h4>
+      <div class="muted" style="font-size:12px; margin-bottom:8px;">
+        Type a topic name (e.g., “Sentencing”, “Evidence”, “Appeal outcome”). The system will assign an internal key automatically.
+      </div>
+
+      <form method="post" action="/ui/topics/accept" class="row" style="gap:10px; align-items:end;">
+        <input type="hidden" name="document_id" value="{{ doc_id }}">
+        <input type="hidden" name="run_id" value="{{ run_id or '' }}">
+
+        <div class="grow">
+          <label class="muted">Topic name</label>
+          <input class="grow" name="topic_label" placeholder="e.g., Sentencing" required>
+        </div>
+
+        {# DO NOT send topic_key; backend will generate deterministically from label #}
+        <button type="submit" class="btnlink">Add Topic</button>
+      </form>
+    </div>
+{#  {% endif %}#}
+
+  {% if not topics or topics|length == 0 %}
+    <div class="muted">No topics found for this document.</div>
+  {% else %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Topic</th>
+          <th>Score</th>
+          <th>Source</th>
+          <th>Status</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+
+      <tbody>
+      {% for t in topics %}
+        {% set src = t.get("source") if t is mapping else t.source %}
+        {% set lbl = t.get("topic_label") if t is mapping else t.topic_label %}
+        {% set key = t.get("topic_key") if t is mapping else t.topic_key %}
+        {% set sc  = t.get("score") if t is mapping else t.score %}
+        {% set upd = t.get("updated_at") if t is mapping else t.updated_at %}
+        {% set at  = (t.get("assignment_type") if t is mapping else t.assignment_type) %}
+        {% set st  = (t.get("status") if t is mapping else t.status) %}
+
+        <tr>
+          <td><strong>{{ lbl }}</strong></td>
+          <td class="mono">{{ "%.2f"|format(sc or 0) }}</td>
+          <td><span class="pill">{{ src }}</span></td>
+          <td class="mono">{{ (st or "") }}</td>
+          <td class="mono">{{ upd or "" }}</td>
+
+          <td class="actions">
+  {# Accept/Reject for suggestions (non-human, active) #}
+{#  {% if user.role in ["admin", "reviewer"] and (st not in ["deleted", "rejected"]) and (at != "human") %}#}
+    {% if (st not in ["deleted", "rejected"]) and (at != "human") %}
+
+    {# Accept: convert the existing suggestion into a human label (no typing) #}
+    <form method="post" action="/ui/topics/accept" style="display:inline;">
+      <input type="hidden" name="document_id" value="{{ doc_id }}">
+      <input type="hidden" name="run_id" value="{{ run_id or '' }}">
+      <input type="hidden" name="topic_label" value="{{ lbl }}">
+       <button type="submit" class="btnlink">Accept</button>
+    </form>
+
+    {# Reject: hide the suggestion #}
+    <form method="post" action="/ui/topics/reject" style="display:inline;" onsubmit="return confirm('Reject this suggested topic?');">
+      <input type="hidden" name="document_id" value="{{ doc_id }}">
+      <input type="hidden" name="topic_key" value="{{ key }}">
+      <input type="hidden" name="run_id" value="{{ run_id or '' }}">
+      <button class="btnlink danger" type="submit" >Reject</button>
+    </form>
+  {% endif %}
+
+  {# Remove only for ACTIVE human labels #}
+{#  {% if user.role in ["admin", "reviewer"] and at == "human" and st == "active" %}#}
+      {% if at == "human" and st == "active" %}
+    <form method="post" action="/ui/topics/delete" style="display:inline;" onsubmit="return confirm('Remove this topic label from this document?');">
+      <input type="hidden" name="document_id" value="{{ doc_id }}">
+      <input type="hidden" name="topic_key" value="{{ key }}">
+      <input type="hidden" name="run_id" value="{{ run_id or '' }}">
+      <button class="btnlink warn" type="submit">Remove</button>
+    </form>
+  {% endif %}
+
+  {% if st in ["deleted", "rejected"] %}
+    <span class="muted">({{ st }})</span>
+  {% endif %}
+</td>
+
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="muted" style="font-size:12px; margin-top:10px;">
+      Tip: “Accept” converts a suggestion into a human topic label (so it propagates). “Reject” hides that suggestion.
+    </div>
   {% endif %}
 </div>
 

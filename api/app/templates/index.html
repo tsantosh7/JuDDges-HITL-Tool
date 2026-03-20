@@ -169,36 +169,58 @@
         </div>
       </div>
 
-      <!-- right: login (no fixed min-width) -->
-      <div>
-        <div class="card mini-login" style="padding:14px;">
-          <h2 class="section-title">Sign in</h2>
+              <!-- right: auth / quick actions -->
+        <div>
+          {% if user %}
+            <div class="card" style="padding:14px;">
+              <h2 class="section-title">Welcome back</h2>
+              <p class="muted" style="margin:0 0 12px 0; line-height:1.5;">
+                You’re already signed in. Continue where you left off.
+              </p>
 
-          {% if error %}
-            <div class="alert">{{ error }}</div>
+              <div style="display:grid; gap:10px;">
+                <a class="btnlink" href="/ui/dashboard" style="text-align:center;">Go to Workspace</a>
+                <a class="btnlink" href="/ui/search" style="text-align:center;">Search Documents</a>
+                <a class="btnlink" href="/ui/projects" style="text-align:center;">Go to Projects</a>
+              </div>
+
+              <hr style="margin:14px 0; opacity:.25;">
+
+              <div class="muted small" style="line-height:1.5;">
+                Need a different account?
+              </div>
+              <a class="btnlink" href="/auth/logout" style="display:inline-flex; margin-top:8px;">Sign out</a>
+            </div>
+          {% else %}
+            <div class="card mini-login" style="padding:14px;">
+              <h2 class="section-title">Sign in</h2>
+
+              {% if error %}
+                <div class="alert">{{ error }}</div>
+              {% endif %}
+
+              <form method="post" action="/auth/login">
+                <div style="margin-bottom:10px;">
+                  <label class="muted">Username or Email</label>
+                  <input type="text" name="username" autocomplete="username" required>
+                </div>
+                <div style="margin-bottom:12px;">
+                  <label class="muted">Password</label>
+                  <input type="password" name="password" autocomplete="current-password" required>
+                </div>
+
+                <button type="submit" class="btnlink" style="width:100%;">Login</button>
+              </form>
+
+              <hr style="margin:14px 0; opacity:.25;">
+
+              <div class="muted small" style="line-height:1.5;">
+                New here?
+                <a class="btnlink" href="/auth/register" style="display:inline-flex; margin-top:8px;">Create an account</a>
+              </div>
+            </div>
           {% endif %}
-
-          <form method="post" action="/auth/login">
-            <div style="margin-bottom:10px;">
-              <label class="muted">Username or Email</label>
-              <input type="text" name="username" autocomplete="username" required>
-            </div>
-            <div style="margin-bottom:12px;">
-              <label class="muted">Password</label>
-              <input type="password" name="password" autocomplete="current-password" required>
-            </div>
-
-            <button type="submit" class="btnlink" style="width:100%;">Login</button>
-          </form>
-
-          <hr style="margin:14px 0; opacity:.25;">
-
-          <div class="muted small" style="line-height:1.5;">
-            New here?
-            <a class="btnlink" href="/auth/register" style="display:inline-flex; margin-top:8px;">Create an account</a>
-          </div>
         </div>
-      </div>
 
     </div>
   </div>

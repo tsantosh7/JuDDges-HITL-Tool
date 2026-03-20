@@ -3,7 +3,8 @@
 <h1>Add to Project</h1>
 
 <div class="card">
-  <p class="muted">Paste one <span class="mono">document_id</span> per line. This attaches documents to the selected project and updates Solr project membership.</p>
+  <p class="muted">Paste one <span class="mono">document_id</span> per line. This page adds documents to the project currently selected in Workspace; it does not show a list of all projects or let you browse project contents.</p>
+  <p class="muted" style="margin-top:8px;">Use this after you have already chosen a project in <a href="/ui/dashboard">Workspace</a>, then add one or more document IDs here.</p>
 
   {% if message %}
     <div class="alert">{{ message }}</div>

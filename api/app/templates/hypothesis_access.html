@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Hypothesis access</h1>
+
+<div class="card">
+  <h3>Why you might see “Group unavailable”</h3>
+  <p class="muted">
+    Our model predictions are stored in a private Hypothesis group.
+    If your Hypothesis account is not a member of the group, Hypothesis shows “Group unavailable”.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Step 1 — Log in to Hypothesis</h3>
+  <p class="muted">
+    Make sure you’re logged in at hypothes.is using the Hypothesis account you want to use.
+  </p>
+  <a class="btnlink" href="https://hypothes.is/login" target="_blank" rel="noopener">Open Hypothesis login</a>
+  <a class="btnlink" href="https://hypothes.is/signup" target="_blank" rel="noopener">Create Hypothesis account</a>
+</div>
+
+<div class="card">
+  <h3>Step 2 — Open the Model Predictions group</h3>
+  <p class="muted">
+    If you can’t view it, you need to be added to the group.
+  </p>
+  <a class="btnlink" href="{{ model_group_url }}" target="_blank" rel="noopener">
+    Open Model Group ({{ model_gid }})
+  </a>
+
+  <div style="margin-top:12px;">
+    <h4 style="margin:0 0 6px 0;">Request access</h4>
+    <p class="muted" style="margin:0 0 8px 0;">
+      Click this to send the admin a request to add your Hypothesis account to the model group.
+      (Tip: include your Hypothesis username or email in the message.)
+    </p>
+
+    <form method="post" action="/auth/request_access">
+      <input type="hidden" name="message" value="Please add my Hypothesis account to the Model Predictions group ({{ model_gid }}). My Hypothesis username/email is: ________">
+      <button type="submit" class="btnlink">Request Model Group Access</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Step 3 — Set your personal workspace group</h3>
+  <p class="muted">
+    Your personal coding should go into your own private workspace group so it doesn’t affect gold or model annotations.
+  </p>
+  <a class="btnlink" href="{{ workspace_settings_url }}">Set workspace group</a>
+</div>
+
+<div class="card">
+  <h3>Gold annotations (admin/judges only)</h3>
+  <p class="muted">
+    Gold annotations are kept separate and protected. If you’re a judge/admin and need access:
+  </p>
+  <a class="btnlink" href="{{ gold_group_url }}" target="_blank" rel="noopener">
+    Open Gold Group ({{ gold_gid }})
+  </a>
+</div>
+
+{% endblock %}
