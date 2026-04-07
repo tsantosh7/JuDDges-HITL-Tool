@@ -96,10 +96,17 @@
 
       <div class="grow">
         <label class="muted">Code</label>
-        <div class="muted" style="font-size:12px; margin:4px 0 6px 0;">Limits results to documents that already contain the selected extracted value/code.</div>
+        <div class="muted" style="font-size:12px; margin:4px 0 6px 0;">Shows codes available in the current filtered results. Selecting a code limits results to documents that already contain that extracted value/code.</div>
         <select name="code">
           <option value="">(any)</option>
-          {% set code_f = facets.get("codes_all_ss") or [] %}
+{#          {% set code_f = facets.get("codes_all_ss") or [] %}#}
+            {% if has_human == "1" %}
+              {% set code_f = facets.get("codes_present_human_ss") or [] %}
+            {% elif has_human == "0" %}
+              {% set code_f = facets.get("codes_present_model_ss") or [] %}
+            {% else %}
+              {% set code_f = facets.get("codes_all_ss") or [] %}
+            {% endif %}
           {% for i in range(0, code_f|length, 2) %}
             {% set val = code_f[i] %}
             {% set cnt = code_f[i+1] if (i+1) < (code_f|length) else 0 %}
@@ -127,11 +134,14 @@
       </div>
 
       <div style="min-width:220px;">
-        <label class="muted">Human coding completed</label>
+        <label class="muted">Coding source</label>
+            <div class="muted" style="font-size:12px; margin:4px 0 6px 0;">
+              Filter documents by coding source.
+            </div>
         <select name="has_human">
-          <option value="" {% if not has_human %}selected{% endif %}>(any)</option>
-          <option value="1" {% if has_human == "1" %}selected{% endif %}>Yes</option>
-          <option value="0" {% if has_human == "0" %}selected{% endif %}>No (needs coding)</option>
+          <option value="" {% if not has_human %}selected{% endif %}>Any</option>
+          <option value="1" {% if has_human == "1" %}selected{% endif %}>Human only</option>
+          <option value="0" {% if has_human == "0" %}selected{% endif %}>AI only</option>
         </select>
       </div>
 

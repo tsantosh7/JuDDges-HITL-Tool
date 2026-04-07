@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1 style="margin-bottom:8px;">Projects</h1>
+<p class="muted" style="margin-top:0;">
+  Browse your projects, switch the active project, and view the documents already added.
+</p>
+
+{% if message %}
+  <div class="alert">{{ message }}</div>
+{% endif %}
+
+<div style="display:grid; grid-template-columns: 320px minmax(0, 1fr); gap:18px; align-items:start;">
+
+  <!-- Left column -->
+  <div class="card" style="position:sticky; top:16px;">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+      <h2 style="margin:0;">Browse Projects</h2>
+      <span class="pill">{{ projects|length if projects else 0 }}</span>
+    </div>
+
+    <form method="get" action="/ui/projects" style="margin-top:12px;">
+      <select name="project_id" class="grow" onchange="this.form.submit()" style="width:100%;">
+        <option value="">Choose a project…</option>
+        {% for p in projects %}
+          <option value="{{ p.project_id }}" {% if p.project_id == selected_project_id %}selected{% endif %}>
+            {{ p.name }}{% if p.description %} — {{ p.description[:60] }}{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </form>
+
+    <div style="margin-top:14px; display:flex; flex-direction:column; gap:10px; max-height:60vh; overflow:auto;">
+      {% if projects and projects|length > 0 %}
+        {% for p in projects %}
+          <div
+            style="display:block; padding:12px; border:1px solid #e8e8e8; border-radius:12px; background:{% if p.project_id == selected_project_id %}#f8fafc{% else %}#fff{% endif %};"
+          >
+            <a
+              href="/ui/projects?project_id={{ p.project_id }}"
+              style="display:block; text-decoration:none; color:inherit;"
+            >
+              <div style="font-weight:700;">{{ p.name }}</div>
+              <div class="muted" style="font-size:13px; margin-top:4px;">
+                {{ (p.description or "No description yet.")[:100] }}{% if p.description and p.description|length > 100 %}…{% endif %}
+              </div>
+            </a>
+
+            <div class="row" style="gap:8px; margin-top:10px; flex-wrap:wrap;">
+              <a class="btnlink" href="/ui/projects?project_id={{ p.project_id }}">View</a>
+              <form method="post" action="/ui/projects/use" style="margin:0;">
+                <input type="hidden" name="project_id" value="{{ p.project_id }}">
+{#                <button type="submit" class="btnlink">Use Project</button>#}
+              </form>
+              {% if p.project_id == selected_project_id %}
+                <span class="pill">Open</span>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="muted">No projects found yet.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Right column -->
+  <div style="display:flex; flex-direction:column; gap:16px;">
+
+    {% if active_project %}
+      <div class="card">
+        <div class="row" style="justify-content:space-between; align-items:flex-start; gap:12px;">
+          <div class="grow">
+            <h2 style="margin:0 0 6px 0;">{{ active_project.name }}</h2>
+            <div class="muted" style="line-height:1.6;">
+              {{ active_project.description or "No description added yet." }}
+            </div>
+          </div>
+          <div class="meta">
+            <span class="pill">Project</span>
+            <span class="pill">{{ project_documents|length if project_documents else 0 }} docs</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <details>
+          <summary style="cursor:pointer; font-weight:700;">Edit project details</summary>
+          <form method="post" action="/ui/projects/update" style="margin-top:12px;">
+            <input type="hidden" name="project_id" value="{{ active_project.project_id }}">
+
+            <label class="muted" style="display:block; margin-bottom:6px;">Project name</label>
+            <input
+              name="name"
+              value="{{ active_project.name }}"
+              required
+              maxlength="200"
+              style="width:100%; margin-bottom:10px;"
+            >
+
+            <label class="muted" style="display:block; margin-bottom:6px;">Description</label>
+            <textarea
+              name="description"
+              rows="4"
+              maxlength="1000"
+              style="width:100%;"
+              placeholder="Short summary of the project"
+            >{{ active_project.description or "" }}</textarea>
+
+            <div class="row" style="margin-top:10px;">
+              <button type="submit" class="btnlink">Save changes</button>
+            </div>
+          </form>
+        </details>
+      </div>
+
+      <div class="card">
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <h3 style="margin:0;">Documents in project</h3>
+          <span class="muted">{{ project_documents|length if project_documents else 0 }} total</span>
+        </div>
+
+        {% if project_documents and project_documents|length > 0 %}
+          <div style="margin-top:12px; overflow:auto;">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Published</th>
+                  <th>Document ID</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for d in project_documents %}
+                  <tr>
+                    <td><strong>{{ d.title or "(untitled)" }}</strong></td>
+                    <td class="mono">{{ d.published_date or "—" }}</td>
+                    <td class="mono">{{ d.document_id[:8] }}…</td>
+                    <td><a class="btnlink" href="/ui/docs/{{ d.document_id }}">Open</a></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="muted" style="margin-top:10px;">No documents added yet.</div>
+        {% endif %}
+      </div>
+
+    {% else %}
+      <div class="card">
+        <h2>Open a project</h2>
+        <div class="muted">Choose a project from the left to view its description and documents.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}

@@ -38,15 +38,11 @@
       {% endfor %}
     </select>
     <button type="submit" class="btnlink">Use Project</button>
-    <a class="btnlink" href="/ui/projects{% if selected_project_id %}?project_id={{ selected_project_id }}{% endif %}">Go to Projects</a>
   </form>
-
-  <div class="muted" style="margin-top:8px;">Choose the project you want to work in, then select <strong>Use Project</strong> to make it active across Search, Add to Project, and Export.</div>
 
   {% if selected_project_name %}
     <div class="meta">
       <span class="pill">Active: {{ selected_project_name }}</span>
-{#      <a class="btnlink" href="/ui/projects?project_id={{ selected_project_id }}">Open active project</a>#}
     </div>
   {% endif %}
 </div>
@@ -62,8 +58,8 @@
 
     <div class="row">
       <input class="grow" name="team_name" value="Default Team" placeholder="Team name (optional)" maxlength="200">
+      <div class="muted" style="font-size:12px; margin-top:6px;">Use a team name here, not an email address. Leave as <strong>Default Team</strong> unless you want to group projects under a different team name.</div>
     </div>
-    <div class="muted" style="margin-top:6px;">Use a team name here, such as Default Team or Research Team. This field does not require an email address.</div>
 
     <div style="margin-top:10px;">
       <label class="muted" style="display:block; margin-bottom:6px;">
@@ -93,7 +89,7 @@
         </div>
 
         <div class="grow">
-          <div><strong><a href="/ui/projects?project_name={{ c.project_name|urlencode }}">{{ c.project_name }}</a></strong></div>
+          <div><strong>{{ c.project_name }}</strong></div>
           {% if c.project_description %}
             <div class="muted" style="margin-top:4px;">{{ c.project_description }}</div>
           {% else %}
@@ -113,9 +109,9 @@
 
 <div class="grid">
   <a class="bigbtn" href="/ui/search">Search Documents</a>
-  <a class="bigbtn" href="/ui/projects{% if selected_project_id %}?project_id={{ selected_project_id }}{% endif %}">Go to Projects</a>
-  <a class="bigbtn" href="/ui/export">Extract Data</a>
   <a class="bigbtn" href="/ui/codes">Baseline Codes</a>
+  <a class="bigbtn" href="/ui/add_to_project">Add to Project</a>
+  <a class="bigbtn" href="/ui/export">Extract Data</a>
   <a class="bigbtn" href="/ui/documentation">Help</a>
 </div>
 

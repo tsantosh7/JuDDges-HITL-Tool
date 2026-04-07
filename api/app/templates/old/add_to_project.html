@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Add to Project</h1>
+
+<div class="card">
+  <p class="muted">Paste one <span class="mono">document_id</span> per line. This attaches documents to the selected project and updates Solr project membership.</p>
+
+  {% if message %}
+    <div class="alert">{{ message }}</div>
+  {% endif %}
+
+  <form method="post" action="/ui/add_to_project">
+    <textarea name="document_ids_text" rows="10" style="width:100%;" placeholder="demo-1&#10;demo-2&#10;..."></textarea>
+    <div class="row" style="margin-top:10px;">
+      <button type="submit" class="btnlink">Add Documents</button>
+      <a class="btnlink" href="/ui/search">Search Documents</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+

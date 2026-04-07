@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Opened Document</h1>
 
 {# ---------- Helpers: handle Solr fields that can be str OR list ---------- #}
 {% set doc_id = doc.get("document_id_s") or "" %}
@@ -273,120 +272,6 @@
 {% endif %}
 
 <div class="card">
-  <h3>Codes identified for this document</h3>
-
-  <div class="meta">
-    <span class="pill">human-only: {{ code_stats.human_only }}</span>
-    <span class="pill">model-only: {{ code_stats.model_only }}</span>
-    <span class="pill">both: {{ code_stats.both }}</span>
-    <span class="pill">disagreements: {{ code_stats.disagree }}</span>
-  </div>
-
-  {% if not codes_view or codes_view|length == 0 %}
-    <div class="muted">No code values found for this document.</div>
-  {% else %}
-    <table class="table">
-      <thead>
-        <tr>
-          <th style="width:220px;">Code</th>
-          <th>Best value (prefers human normalized)</th>
-          <th style="width:120px;">Source</th>
-          <th style="width:140px;">Notes</th>
-        </tr>
-      </thead>
-
-      <tbody>
-      {% for r in codes_view %}
-        <tr>
-          <td class="mono"><strong>{{ r.code }}</strong></td>
-
-          <td>
-            {% if r.best %}
-              {{ r.best }}
-            {% else %}
-              <span class="muted">—</span>
-            {% endif %}
-
-            <div style="margin-top:6px;">
-              <details>
-                <summary class="muted" style="cursor:pointer;">Show details</summary>
-
-                <div style="margin-top:10px;">
-                  <div class="row" style="gap:12px; align-items:flex-start;">
-                    <div class="grow">
-                      <div class="muted" style="font-weight:600; margin-bottom:4px;">Human (normalized)</div>
-                      {% if r.human_norm and r.human_norm|length > 0 %}
-                        {% for v in r.human_norm %}
-                          <span class="pill">{{ v }}</span>
-                        {% endfor %}
-                      {% else %}
-                        <div class="muted">—</div>
-                      {% endif %}
-
-                      <div class="muted" style="font-weight:600; margin:10px 0 4px 0;">Human (raw)</div>
-                      {% if r.human_raw and r.human_raw|length > 0 %}
-                        {% for v in r.human_raw %}
-                          <span class="pill">{{ v }}</span>
-                        {% endfor %}
-                      {% else %}
-                        <div class="muted">—</div>
-                      {% endif %}
-                    </div>
-
-                    <div class="grow">
-                      <div class="muted" style="font-weight:600; margin-bottom:4px;">Model (normalized)</div>
-                      {% if r.model_norm and r.model_norm|length > 0 %}
-                        {% for v in r.model_norm %}
-                          <span class="pill">{{ v }}</span>
-                        {% endfor %}
-                      {% else %}
-                        <div class="muted">—</div>
-                      {% endif %}
-
-                      <div class="muted" style="font-weight:600; margin:10px 0 4px 0;">Model (raw)</div>
-                      {% if r.model_raw and r.model_raw|length > 0 %}
-                        {% for v in r.model_raw %}
-                          <span class="pill">{{ v }}</span>
-                        {% endfor %}
-                      {% else %}
-                        <div class="muted">—</div>
-                      {% endif %}
-                    </div>
-                  </div>
-                </div>
-              </details>
-            </div>
-          </td>
-
-          <td>
-            {% if r.source == "human" %}
-              <span class="pill">Human</span>
-            {% elif r.source == "model" %}
-              <span class="pill">Model</span>
-            {% elif r.source == "both" %}
-              <span class="pill">Both</span>
-            {% else %}
-              <span class="muted">—</span>
-            {% endif %}
-          </td>
-
-          <td>
-            {% if r.disagree %}
-              <span class="pill">⚠ disagree</span>
-            {% else %}
-              <span class="muted">—</span>
-            {% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  {% endif %}
-</div>
-
-
-
-<div class="card">
   <h3>Topics (HITL)</h3>
     {% if not run_id %}
       <div class="muted" style="font-size:12px; margin: 6px 0 10px 0;">
@@ -494,6 +379,118 @@
     <div class="muted" style="font-size:12px; margin-top:10px;">
       Tip: “Accept” converts a suggestion into a human topic label (so it propagates). “Reject” hides that suggestion.
     </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Codes (Extracted Values)</h3>
+
+  <div class="meta">
+    <span class="pill">human-only: {{ code_stats.human_only }}</span>
+    <span class="pill">model-only: {{ code_stats.model_only }}</span>
+    <span class="pill">both: {{ code_stats.both }}</span>
+    <span class="pill">disagreements: {{ code_stats.disagree }}</span>
+  </div>
+
+  {% if not codes_view or codes_view|length == 0 %}
+    <div class="muted">No code values found for this document.</div>
+  {% else %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th style="width:220px;">Code</th>
+          <th>Best value (prefers human normalized)</th>
+          <th style="width:120px;">Source</th>
+          <th style="width:140px;">Notes</th>
+        </tr>
+      </thead>
+
+      <tbody>
+      {% for r in codes_view %}
+        <tr>
+          <td class="mono"><strong>{{ r.code }}</strong></td>
+
+          <td>
+            {% if r.best %}
+              {{ r.best }}
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+
+            <div style="margin-top:6px;">
+              <details>
+                <summary class="muted" style="cursor:pointer;">Show details</summary>
+
+                <div style="margin-top:10px;">
+                  <div class="row" style="gap:12px; align-items:flex-start;">
+                    <div class="grow">
+                      <div class="muted" style="font-weight:600; margin-bottom:4px;">Human (normalized)</div>
+                      {% if r.human_norm and r.human_norm|length > 0 %}
+                        {% for v in r.human_norm %}
+                          <span class="pill">{{ v }}</span>
+                        {% endfor %}
+                      {% else %}
+                        <div class="muted">—</div>
+                      {% endif %}
+
+                      <div class="muted" style="font-weight:600; margin:10px 0 4px 0;">Human (raw)</div>
+                      {% if r.human_raw and r.human_raw|length > 0 %}
+                        {% for v in r.human_raw %}
+                          <span class="pill">{{ v }}</span>
+                        {% endfor %}
+                      {% else %}
+                        <div class="muted">—</div>
+                      {% endif %}
+                    </div>
+
+                    <div class="grow">
+                      <div class="muted" style="font-weight:600; margin-bottom:4px;">Model (normalized)</div>
+                      {% if r.model_norm and r.model_norm|length > 0 %}
+                        {% for v in r.model_norm %}
+                          <span class="pill">{{ v }}</span>
+                        {% endfor %}
+                      {% else %}
+                        <div class="muted">—</div>
+                      {% endif %}
+
+                      <div class="muted" style="font-weight:600; margin:10px 0 4px 0;">Model (raw)</div>
+                      {% if r.model_raw and r.model_raw|length > 0 %}
+                        {% for v in r.model_raw %}
+                          <span class="pill">{{ v }}</span>
+                        {% endfor %}
+                      {% else %}
+                        <div class="muted">—</div>
+                      {% endif %}
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </td>
+
+          <td>
+            {% if r.source == "human" %}
+              <span class="pill">Human</span>
+            {% elif r.source == "model" %}
+              <span class="pill">Model</span>
+            {% elif r.source == "both" %}
+              <span class="pill">Both</span>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+
+          <td>
+            {% if r.disagree %}
+              <span class="pill">⚠ disagree</span>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
   {% endif %}
 </div>
 

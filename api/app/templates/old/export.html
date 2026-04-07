@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Extract Data</h1>
-<div class="muted" style="font-size:12px; margin:8px 0 12px 0;">
-  Both exports draw from the same extracted coding set, but they present it differently. The Long CSV shows one row per document-code pair, which is useful for detailed review of individual extracted fields. The Wide CSV shows one row per document, with extracted codes arranged across columns, which is more suitable for spreadsheet-based analysis. In short, the Long CSV is more detailed, while the Wide CSV is more analysis-ready.
-</div>
+<h1>Extract Coded Data</h1>
+
 <div class="card">
   <form method="get" class="row">
     <label class="muted">Version</label>
@@ -34,15 +32,7 @@
       <option value="binary" {% if metric == "binary" %}selected{% endif %}>binary</option>
     </select>
 
-    <label class="muted">Wide CSV column order</label>
-    <select name="column_order">
-      <option value="project_document_url" {% if column_order == "project_document_url" %}selected{% endif %}>Project ID, Document ID, URL</option>
-      <option value="document_project_url" {% if column_order == "document_project_url" %}selected{% endif %}>Document ID, Project ID, URL</option>
-      <option value="document_url_project" {% if column_order == "document_url_project" %}selected{% endif %}>Document ID, URL, Project ID</option>
-      <option value="url_document_project" {% if column_order == "url_document_project" %}selected{% endif %}>URL, Document ID, Project ID</option>
-    </select>
-
-    <button type="submit" class="btnlink">Update</button>
+    <button type="submit">Update</button>
   </form>
 </div>
 
@@ -53,13 +43,12 @@
     Download Long CSV (tidy)
   </a>
 
-  <a class="bigbtn" href="/export/csv_wide?project_id={{ project_id }}&version={{ version }}{% if code %}&code={{ code }}{% endif %}&metric={{ metric }}&column_order={{ column_order }}">
+  <a class="bigbtn" href="/export/csv_wide?project_id={{ project_id }}&version={{ version }}{% if code %}&code={{ code }}{% endif %}&metric={{ metric }}">
     Download Wide CSV
   </a>
 </div>
 
 <div class="muted" style="margin-top:12px;">
   Long CSV = one row per (document, code). Wide CSV = one row per document with codes as columns.
-  The new column order selector changes the first three wide-export columns; code columns remain alphabetical for consistency.
 </div>
 {% endblock %}

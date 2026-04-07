@@ -88,7 +88,7 @@ def login_post(
             )
 
         _set_session_user(request, u)
-        return RedirectResponse("/ui/dashboard", status_code=303)
+        return RedirectResponse("/ui/about", status_code=303)
     finally:
         db.close()
 
@@ -164,7 +164,7 @@ def register_post(
         db.refresh(u)
 
         _set_session_user(request, u)
-        return RedirectResponse("/ui/dashboard", status_code=303)
+        return RedirectResponse("/ui/about", status_code=303)
 
     except IntegrityError:
         db.rollback()
