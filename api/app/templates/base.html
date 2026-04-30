@@ -16,7 +16,7 @@
   <nav class="nav">
     {% if user %}
       <a href="/ui/dashboard" class="{% if _path.startswith('/ui/dashboard') %}active{% endif %}">Workspace</a>
-      <a href="/ui/codes" class="{% if _path.startswith('/ui/codes') %}active{% endif %}">Baseline Codes</a>
+      <a href="/ui/codes" class="{% if _path.startswith('/ui/codes') %}active{% endif %}">Coding Scheme</a>
       <a href="/ui/search" class="{% if _path.startswith('/ui/search') %}active{% endif %}">Search Documents</a>
       <a href="/ui/projects" class="{% if _path.startswith('/ui/projects') or _path.startswith('/ui/add_to_project') %}active{% endif %}">Go to Projects</a>
       <a href="/ui/export" class="{% if _path.startswith('/ui/export') %}active{% endif %}">Extract Data</a>

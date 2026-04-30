@@ -349,7 +349,7 @@
       <th>Description + Possible Values + Examples</th>
       <th style="width: 10%;">Version</th>
       <th style="width: 8%;">Locked</th>
-      <th style="width: 8%;">Active</th>
+{#      <th style="width: 8%;">Active</th>#}
       <th style="width: 16%;">Aliases</th>
       {% if user.role == "admin" %}<th style="width: 16%;">Actions</th>{% endif %}
     </tr>
@@ -402,7 +402,7 @@
 
       <td><span class="pill">{{ c.version }}</span></td>
       <td>{{ "Yes" if c.is_locked else "No" }}</td>
-      <td>{{ "Yes" if c.is_active else "No" }}</td>
+{#      <td>{{ "Yes" if c.is_active else "No" }}</td>#}
 
       <td class="mono">
         {% if c.aliases and c.aliases|length > 0 %}

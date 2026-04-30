@@ -1037,9 +1037,11 @@ async def ui_add_one_from_search(
 @router.get("/export", response_class=HTMLResponse)
 async def ui_export_page(
     request: Request,
+    project_id: Optional[UUID] = None,
     version: str = "all",
-    code: str | None = None,
-    include_annotators: str | None = None,
+    source: str = "all",
+    code: Optional[str] = None,
+    include_annotators: Optional[str] = None,
     metric: str = "value",
     column_order: str = "project_document_url",
     user=Depends(require_paid_user),
@@ -1061,6 +1063,7 @@ async def ui_export_page(
             "codes": codes,
             "version": version,
             "code": code,
+            "source": source,
             "include_annotators": include_annotators,
             "metric": metric,
             "column_order": column_order,

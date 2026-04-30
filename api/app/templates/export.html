@@ -4,6 +4,7 @@
 <div class="muted" style="font-size:12px; margin:8px 0 12px 0;">
   Both exports draw from the same extracted coding set, but they present it differently. The Long CSV shows one row per document-code pair, which is useful for detailed review of individual extracted fields. The Wide CSV shows one row per document, with extracted codes arranged across columns, which is more suitable for spreadsheet-based analysis. In short, the Long CSV is more detailed, while the Wide CSV is more analysis-ready.
 </div>
+
 <div class="card">
   <form method="get" class="row">
     <label class="muted">Version</label>
@@ -11,6 +12,13 @@
       <option value="all" {% if version == "all" %}selected{% endif %}>All</option>
       <option value="v1" {% if version == "v1" %}selected{% endif %}>V1 (base 43)</option>
       <option value="ext" {% if version == "ext" %}selected{% endif %}>Extensions</option>
+    </select>
+
+    <label class="muted">Coding source</label>
+    <select name="source">
+      <option value="human" {% if source == "human" %}selected{% endif %}>Human only</option>
+      <option value="model" {% if source == "model" %}selected{% endif %}>AI only</option>
+      <option value="all" {% if source == "all" %}selected{% endif %}>All coding sources</option>
     </select>
 
     <label class="muted">Code (optional)</label>
@@ -27,7 +35,7 @@
       <option value="1" {% if include_annotators == "1" %}selected{% endif %}>Yes</option>
     </select>
 
-    <label class="muted">Wide metric</label>
+    <label class="muted">Wide CSV metric</label>
     <select name="metric">
       <option value="value" {% if metric == "value" %}selected{% endif %}>value</option>
       <option value="count" {% if metric == "count" %}selected{% endif %}>count</option>
@@ -49,17 +57,17 @@
 {% set inc = "true" if include_annotators == "1" else "false" %}
 
 <div class="grid">
-  <a class="bigbtn" href="/export/csv?project_id={{ project_id }}&version={{ version }}{% if code %}&code={{ code }}{% endif %}&include_annotators={{ inc }}">
+  <a class="bigbtn" href="/export/csv?project_id={{ project_id }}&source={{ source }}&version={{ version }}{% if code %}&code={{ code }}{% endif %}&include_annotators={{ inc }}">
     Download Long CSV (tidy)
   </a>
 
-  <a class="bigbtn" href="/export/csv_wide?project_id={{ project_id }}&version={{ version }}{% if code %}&code={{ code }}{% endif %}&metric={{ metric }}&column_order={{ column_order }}">
+  <a class="bigbtn" href="/export/csv_wide?project_id={{ project_id }}&source={{ source }}&version={{ version }}{% if code %}&code={{ code }}{% endif %}&metric={{ metric }}&column_order={{ column_order }}">
     Download Wide CSV
   </a>
 </div>
 
 <div class="muted" style="margin-top:12px;">
   Long CSV = one row per (document, code). Wide CSV = one row per document with codes as columns.
-  The new column order selector changes the first three wide-export columns; code columns remain alphabetical for consistency.
+  The column order selector changes the first three wide-export columns; code columns remain alphabetical for consistency, and when exporting all coding sources, human and AI columns are shown separately.
 </div>
 {% endblock %}
