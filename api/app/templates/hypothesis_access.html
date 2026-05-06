@@ -1,64 +1,277 @@
+{#{% extends "base.html" %}#}
+{#{% block content %}#}
+{##}
+{#<h1>Set up Hypothesis</h1>#}
+{##}
+{#<div class="card" style="border-left:4px solid #2563eb; background:#eff6ff;">#}
+{#  <h2>How Hypothesis works in this tool</h2>#}
+{#  <p>#}
+{#    This tool uses Hypothesis groups for document annotations.#}
+{#  </p>#}
+{##}
+{#  <ul class="muted" style="line-height:1.7;">#}
+{#    <li>#}
+{#      <strong>Model Predictions group:</strong>#}
+{#      lets you view annotations created by the model.#}
+{#    </li>#}
+{#    <li>#}
+{#      <strong>Your personal workspace group:</strong>#}
+{#      where your own annotations should be saved.#}
+{#    </li>#}
+{#    <li>#}
+{#      <strong>Gold annotations group:</strong>#}
+{#      used only by admins or judges.#}
+{#    </li>#}
+{#  </ul>#}
+{#</div>#}
+{##}
+{#<div class="card">#}
+{#  <h2>Step 1 — Log in to Hypothesis</h2>#}
+{#  <p class="muted">#}
+{#    First, log in to Hypothesis using the account you will use for this project.#}
+{#  </p>#}
+{##}
+{#  <a class="btnlink" href="https://hypothes.is/login" target="_blank" rel="noopener">#}
+{#    Log in to Hypothesis#}
+{#  </a>#}
+{##}
+{#  <a class="btnlink" href="https://hypothes.is/signup" target="_blank" rel="noopener">#}
+{#    Create Hypothesis account#}
+{#  </a>#}
+{#</div>#}
+{##}
+{#<div class="card" style="border-left:4px solid #f59e0b; background:#fffbeb;">#}
+{#  <h2>Step 2 — Join the Model Predictions group</h2>#}
+{##}
+{#  <p class="muted">#}
+{#    You must be a member of the Model Predictions group to see model annotations.#}
+{#    If you are not a member, Hypothesis may show “Group unavailable”.#}
+{#  </p>#}
+{##}
+{#{% if model_invite_url %}#}
+{#  <a class="btnlink" href="{{ model_invite_url }}" target="_blank" rel="noopener">#}
+{#    Join Model Predictions Group#}
+{#  </a>#}
+{#{% else %}#}
+{#  <div style="margin-top:14px; padding:12px; border:1px solid #fde68a; border-radius:10px; background:#fff7ed;">#}
+{#    <strong>Need access?</strong>#}
+{#    <p class="muted" style="margin:6px 0 10px 0;">#}
+{#      Ask the project admin to send you the private Hypothesis invite link for the Model Predictions group.#}
+{#    </p>#}
+{##}
+{#    <form method="post" action="/auth/request_access">#}
+{#      <input#}
+{#        type="hidden"#}
+{#        name="message"#}
+{#        value="Please send me the Hypothesis invite link for the Model Predictions group ({{ model_gid }}). My Hypothesis username/email is: ________"#}
+{#      >#}
+{#      <button type="submit" class="btnlink">#}
+{#        Request Model Group Invite#}
+{#      </button>#}
+{#    </form>#}
+{#  </div>#}
+{#{% endif %}#}
+{#</div>#}
+{##}
+{#<div class="card" style="border-left:4px solid #16a34a; background:#f0fdf4;">#}
+{#  <h2>Step 3 — Set your personal workspace</h2>#}
+{##}
+{#  <p class="muted">#}
+{#    Your personal annotations should be saved in your own private Hypothesis workspace group.#}
+{#    This keeps your work separate from model annotations, gold annotations, and other users’ annotations.#}
+{#  </p>#}
+{##}
+{#  <a class="btnlink" href="{{ workspace_settings_url }}">#}
+{#    Set My Personal Workspace#}
+{#  </a>#}
+{#</div>#}
+{##}
+{#<div class="card">#}
+{#  <h2>Step 4 — Start coding documents</h2>#}
+{##}
+{#  <p class="muted">#}
+{#    After joining the Model Predictions group and setting your personal workspace,#}
+{#    go to Search Documents, open a document, and use the Hypothesis links on the document page.#}
+{#  </p>#}
+{##}
+{#  <a class="btnlink" href="/ui/search">#}
+{#    Go to Search Documents#}
+{#  </a>#}
+{#</div>#}
+{##}
+{#{% if user.role == "admin" %}#}
+{#  <div class="card">#}
+{#    <h2>Admin / judge only — Gold annotations</h2>#}
+{#    <p class="muted">#}
+{#      Gold annotations are separate from model predictions and personal workspaces.#}
+{#    </p>#}
+{##}
+{#    <a class="btnlink" href="{{ gold_group_url }}" target="_blank" rel="noopener">#}
+{#      Open Gold Group#}
+{#    </a>#}
+{#  </div>#}
+{#{% endif %}#}
+{##}
+{#{% endblock %}#}
+
 {% extends "base.html" %}
 {% block content %}
 
-<h1>Hypothesis access</h1>
+<h1>Set up Hypothesis</h1>
 
-<div class="card">
-  <h3>Why you might see “Group unavailable”</h3>
+<div class="card" style="border-left:4px solid #2563eb; background:#eff6ff;">
+  <h2>How Hypothesis works in this tool</h2>
   <p class="muted">
-    Our model predictions are stored in a private Hypothesis group.
-    If your Hypothesis account is not a member of the group, Hypothesis shows “Group unavailable”.
+    This tool uses Hypothesis groups for document annotations.
+  </p>
+
+  <ul class="muted" style="line-height:1.7;">
+    <li>
+      <strong>Model Predictions group:</strong>
+      lets you view annotations created by the model.
+    </li>
+    <li>
+      <strong>Your personal workspace group:</strong>
+      where your own annotations should be saved.
+    </li>
+    <li>
+      <strong>Gold annotations group:</strong>
+      used only by admins or judges.
+    </li>
+  </ul>
+</div>
+
+
+<div class="card" style="border:2px solid #dc2626; background:#fff5f5;">
+  <h2 style="color:#b91c1c;">⚠️ Important: Do not annotate in the Model Predictions group</h2>
+
+  <p style="color:#7f1d1d;">
+    The Model Predictions group is for viewing model-generated annotations only.
+    Do not create, edit, reply to, or delete annotations in this group.
+  </p>
+
+  <p style="color:#7f1d1d;">
+    Adding human annotations to the Model Predictions group may contaminate the model annotation layer
+    and affect downstream review, syncing, and data extraction.
+  </p>
+
+  <p style="color:#7f1d1d; font-weight:700;">
+    Before adding any annotation or reply, switch Hypothesis to your personal workspace group.
   </p>
 </div>
 
-<div class="card">
-  <h3>Step 1 — Log in to Hypothesis</h3>
-  <p class="muted">
-    Make sure you’re logged in at hypothes.is using the Hypothesis account you want to use.
-  </p>
-  <a class="btnlink" href="https://hypothes.is/login" target="_blank" rel="noopener">Open Hypothesis login</a>
-  <a class="btnlink" href="https://hypothes.is/signup" target="_blank" rel="noopener">Create Hypothesis account</a>
-</div>
 
 <div class="card">
-  <h3>Step 2 — Open the Model Predictions group</h3>
+  <h2>Step 1 — Log in to Hypothesis</h2>
   <p class="muted">
-    If you can’t view it, you need to be added to the group.
+    Log in to Hypothesis using the account you will use for this project.
   </p>
-  <a class="btnlink" href="{{ model_group_url }}" target="_blank" rel="noopener">
-    Open Model Group ({{ model_gid }})
+
+  <a class="btnlink" href="https://hypothes.is/login" target="_blank" rel="noopener">
+    Log in to Hypothesis
   </a>
 
-  <div style="margin-top:12px;">
-    <h4 style="margin:0 0 6px 0;">Request access</h4>
-    <p class="muted" style="margin:0 0 8px 0;">
-      Click this to send the admin a request to add your Hypothesis account to the model group.
-      (Tip: include your Hypothesis username or email in the message.)
+  <a class="btnlink" href="https://hypothes.is/signup" target="_blank" rel="noopener">
+    Create Hypothesis account
+  </a>
+</div>
+
+<div class="card" style="border-left:4px solid #7c3aed; background:#f5f3ff;">
+  <h2>Step 2 — Install Hypothesis in your browser</h2>
+
+  <p class="muted">
+    Do not rely on old Via-style links. Use the official browser extension or bookmarklet instead.
+  </p>
+
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+    <a class="btnlink" href="https://chromewebstore.google.com/detail/hypothesis-web-pdf-annota/bjfhmglciegochdpefhhlphglcehbmek" target="_blank" rel="noopener">
+      Install Chrome Extension
+    </a>
+
+    <a class="btnlink" href="https://web.hypothes.is/help/installing-the-bookmarklet/" target="_blank" rel="noopener">
+      Install Bookmarklet for Firefox, Safari, Edge, or other browsers
+    </a>
+  </div>
+
+  <p class="muted" style="margin-top:12px;">
+    After installation, open a document in this tool, activate Hypothesis from your browser,
+    and choose the correct Hypothesis group in the sidebar before annotating.
+  </p>
+</div>
+
+<div class="card" style="border-left:4px solid #f59e0b; background:#fffbeb;">
+  <h2>Model Predictions</h2>
+
+  <p class="muted">
+    Model predictions are managed by the app and should be treated as read-only reference annotations.
+    Users should not annotate in the Model Predictions group.
+  </p>
+
+  <p class="muted">
+    For your own coding, use your personal Hypothesis workspace group.
+  </p>
+
+  {% if user.role == "admin" %}
+    <a class="btnlink" href="{{ model_group_url }}" target="_blank" rel="noopener">
+      Admin only: Open Model Predictions Group
+    </a>
+  {% endif %}
+</div>
+
+<div class="card" style="border-left:4px solid #16a34a; background:#f0fdf4;">
+  <h2>Step 4 — Create your personal Hypothesis workspace</h2>
+
+  <p class="muted">
+    Create a private Hypothesis group for your own annotations.
+    This keeps your work separate from model annotations, gold annotations, and other users’ work.
+  </p>
+
+  <a class="btnlink" href="https://hypothes.is/groups/new" target="_blank" rel="noopener">
+    Create Private Hypothesis Group
+  </a>
+
+  <p class="muted" style="margin-top:12px;">
+    After creating your group, copy the group link and send it to the app admin.
+    The admin must sync or assign the group before it appears as your personal workspace in this tool.
+  </p>
+</div>
+
+<div class="card" style="border-left:4px solid #0ea5e9; background:#f0f9ff;">
+  <h2>Step 5 — Check your app workspace</h2>
+
+  <p class="muted">
+    Once your personal Hypothesis group has been synced into the app, check that it is assigned to your account.
+  </p>
+
+  <a class="btnlink" href="{{ workspace_settings_url }}">
+    Check My Personal Workspace
+  </a>
+</div>
+
+<div class="card">
+  <h2>Step 6 — Start coding documents</h2>
+
+  <p class="muted">
+    Go to Search Documents, open a document, activate Hypothesis in your browser,
+    and select your personal workspace group in the Hypothesis sidebar before adding annotations.
+  </p>
+
+  <a class="btnlink" href="/ui/search">
+    Go to Search Documents
+  </a>
+</div>
+
+{% if user.role == "admin" %}
+  <div class="card">
+    <h2>Admin / judge only — Gold annotations</h2>
+    <p class="muted">
+      Gold annotations are separate from model predictions and personal workspaces.
     </p>
 
-    <form method="post" action="/auth/request_access">
-      <input type="hidden" name="message" value="Please add my Hypothesis account to the Model Predictions group ({{ model_gid }}). My Hypothesis username/email is: ________">
-      <button type="submit" class="btnlink">Request Model Group Access</button>
-    </form>
+    <a class="btnlink" href="{{ gold_group_url }}" target="_blank" rel="noopener">
+      Open Gold Group
+    </a>
   </div>
-</div>
-
-<div class="card">
-  <h3>Step 3 — Set your personal workspace group</h3>
-  <p class="muted">
-    Your personal coding should go into your own private workspace group so it doesn’t affect gold or model annotations.
-  </p>
-  <a class="btnlink" href="{{ workspace_settings_url }}">Set workspace group</a>
-</div>
-
-<div class="card">
-  <h3>Gold annotations (admin/judges only)</h3>
-  <p class="muted">
-    Gold annotations are kept separate and protected. If you’re a judge/admin and need access:
-  </p>
-  <a class="btnlink" href="{{ gold_group_url }}" target="_blank" rel="noopener">
-    Open Gold Group ({{ gold_gid }})
-  </a>
-</div>
+{% endif %}
 
 {% endblock %}

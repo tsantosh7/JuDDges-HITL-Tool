@@ -2,6 +2,16 @@
 {% block content %}
 <h1>Search Documents</h1>
 
+    <div class="card" style="border-left:4px solid #2563eb; background:#eff6ff; margin-bottom:14px;">
+  Users are first advised to go to the
+  <a href="/ui/codes">Coding Scheme</a>
+  tab to view the variables that the model has already been trained to code and extract.
+</div>
+
+    {% if message %}
+  <div class="alert">{{ message }}</div>
+{% endif %}
+
 {#<form method="get" class="card" style="padding:14px;">#}
 <form id="searchForm" method="get" class="card" style="padding:14px;">
 
@@ -170,8 +180,33 @@
 {#  </details>#}
 </form>
 
-<div class="meta">
+{% set docs = (result.get("docs") or []) %}
+
+<div class="meta" style="justify-content:space-between; gap:10px; align-items:center;">
   <span class="pill">Results: {{ result.get("numFound", 0) }}</span>
+
+  {% if docs|length > 0 %}
+    {% if project_id %}
+      <form method="post" action="/ui/projects/add_search_results" style="margin:0;">
+        {% for d in docs %}
+          {% set doc_id = d.get("document_id_s","") %}
+          {% if doc_id %}
+            <input type="hidden" name="document_ids_text" value="{{ doc_id }}">
+          {% endif %}
+        {% endfor %}
+
+        <input type="hidden" name="next" value="{{ request.url.path }}?{{ request.url.query }}">
+
+        <button type="submit" class="btnlink">
+          Add all results on this page to project
+        </button>
+      </form>
+    {% else %}
+      <a class="btnlink" href="/ui/dashboard?msg=Please%20select%20a%20project%20first">
+        Select project before bulk add
+      </a>
+    {% endif %}
+  {% endif %}
 </div>
 
 <table class="table">

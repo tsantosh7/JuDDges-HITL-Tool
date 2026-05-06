@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Workspace</h1>
+<h1>My Projects</h1>
 
     {% if not access_ok %}
   <div class="card" style="margin-top:12px;">
@@ -26,32 +26,8 @@
   <div class="alert">{{ message }}</div>
 {% endif %}
 
-<div class="card">
-  <h2>Select Project</h2>
-  <form method="post" action="/ui/select_project" class="row">
-    <select name="project_id" class="grow" required>
-      <option value="" disabled {% if not selected_project_id %}selected{% endif %}>Choose a project…</option>
-      {% for p in projects %}
-        <option value="{{ p.project_id }}" {% if p.project_id == selected_project_id %}selected{% endif %}>
-          {{ p.name }}{% if p.description %} — {{ p.description[:60] }}{% endif %}
-        </option>
-      {% endfor %}
-    </select>
-    <button type="submit" class="btnlink">Use Project</button>
-    <a class="btnlink" href="/ui/projects{% if selected_project_id %}?project_id={{ selected_project_id }}{% endif %}">Go to Projects</a>
-  </form>
 
-  <div class="muted" style="margin-top:8px;">Choose the project you want to work in, then select <strong>Use Project</strong> to make it active across Search, Add to Project, and Export.</div>
-
-  {% if selected_project_name %}
-    <div class="meta">
-      <span class="pill">Active: {{ selected_project_name }}</span>
-{#      <a class="btnlink" href="/ui/projects?project_id={{ selected_project_id }}">Open active project</a>#}
-    </div>
-  {% endif %}
-</div>
-
-{#{% if user.role in ["admin", "reviewer"] %}#}
+    {#{% if user.role in ["admin", "reviewer"] %}#}
 <div class="card">
   <h2>Create Project</h2>
   <form method="post" action="/ui/projects/create">
@@ -79,6 +55,84 @@
   </form>
 </div>
 {#{% endif %}#}
+
+
+<div class="card">
+  <h2>Select Project</h2>
+  <form method="post" action="/ui/select_project" class="row">
+    <select name="project_id" class="grow" required>
+      <option value="" disabled {% if not selected_project_id %}selected{% endif %}>Choose a project…</option>
+      {% for p in projects %}
+        <option value="{{ p.project_id }}" {% if p.project_id == selected_project_id %}selected{% endif %}>
+          {{ p.name }}{% if p.description %} — {{ p.description[:60] }}{% endif %}
+        </option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btnlink">Use Project</button>
+{#    <a class="btnlink" href="/ui/projects{% if selected_project_id %}?project_id={{ selected_project_id }}{% endif %}">Go to Projects</a>#}
+  </form>
+
+  <div class="muted" style="margin-top:8px;">Choose the project you want to work in, then select <strong>Use Project</strong> to make it active across Search, Add to Project, and Export.</div>
+
+  {% if selected_project_name %}
+    <div class="meta">
+      <span class="pill">Active: {{ selected_project_name }}</span>
+{#      <a class="btnlink" href="/ui/projects?project_id={{ selected_project_id }}">Open active project</a>#}
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Edit Project</h2>
+
+  {% if selected_project_id %}
+    <div class="muted" style="margin-bottom:10px;">
+      Edit the active project: <strong>{{ selected_project_name }}</strong>
+    </div>
+    <a class="btnlink" href="/ui/projects?project_id={{ selected_project_id }}">Edit Project</a>
+  {% else %}
+    <div class="muted">Select a project first to edit it.</div>
+  {% endif %}
+</div>
+
+<div class="card" style="border:2px solid #dc2626;">
+  <h2 style="color:#b91c1c; display:flex; align-items:center; gap:8px;">
+    ⚠️ Delete Project
+  </h2>
+
+  {% if selected_project_id %}
+    <form method="post" action="/ui/projects/{{ selected_project_id }}/delete">
+      <div class="muted" style="margin-bottom:10px;">
+        You are about to delete the active project:
+        <strong>{{ selected_project_name }}</strong>
+      </div>
+
+       <div style="margin-bottom:12px; padding:12px; border:1px solid #fca5a5; border-radius:10px;">
+        <strong>Warning:</strong>
+        This removes the project and its project-document associations.
+        <strong>This action is irreversible.</strong>
+      </div>
+
+      <label class="muted" style="display:block; margin-bottom:6px;">
+        To confirm, type the exact project name:
+      </label>
+
+      <input
+        name="confirm_project_name"
+        required
+        autocomplete="off"
+        placeholder="{{ selected_project_name }}"
+        style="width:100%; margin-bottom:10px;"
+      >
+        <button type="submit" class="btnlink danger">
+        Delete Project
+      </button>
+    </form>
+  {% else %}
+    <div class="muted">Select a project first to delete it.</div>
+  {% endif %}
+</div>
+
 
 <div class="card" style="margin-top:14px;">
   <h2>People & Projects</h2>
@@ -113,7 +167,7 @@
 
 <div class="grid">
   <a class="bigbtn" href="/ui/search">Search Documents</a>
-  <a class="bigbtn" href="/ui/projects{% if selected_project_id %}?project_id={{ selected_project_id }}{% endif %}">Go to Projects</a>
+{#  <a class="bigbtn" href="/ui/projects{% if selected_project_id %}?project_id={{ selected_project_id }}{% endif %}">Go to Projects</a>#}
   <a class="bigbtn" href="/ui/export">Extract Data</a>
   <a class="bigbtn" href="/ui/codes">Coding Scheme</a>
   <a class="bigbtn" href="/ui/documentation">Help</a>

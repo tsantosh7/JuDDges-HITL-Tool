@@ -1778,28 +1778,23 @@ def create_project_bootstrap(payload: CreateProjectIn, request: Request):
         db.close()
 
 
-# @app.delete("/projects/{project_id}")
-# def delete_project(project_id: str, delete_solr_core: bool = True):
-#     """
-#     Global core should never be deleted as part of a project delete.
-#     """
-#     db = SessionLocal()
-#     try:
-#         proj = db.get(Project, project_id)
-#         if not proj:
-#             raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
-#
-#         core_name = SOLR_GLOBAL_CORE
-#
-#         db.delete(proj)
-#         db.commit()
-#
-#         return {"ok": True, "project_id": project_id, "solr_core": core_name, "deleted_solr_core": False}
-#     finally:
-#         db.close()
 @app.delete("/projects/{project_id}")
-def delete_project(project_id: UUID, request: Request):
+def delete_project(project_id: UUID, request: Request, core: str = SOLR_GLOBAL_CORE):
+    """
+    Delete a project safely.
+
+    This deletes:
+    - the project row
+    - project document memberships
+    - project document review rows
+    - project member rows
+    - project-scoped topic runs/topics, if any still exist
+
+    It does NOT delete the global Solr core.
+    It does NOT delete documents from the global documents table.
+    """
     uid = current_user_id(request)
+
     db = SessionLocal()
     try:
         assert_project_member(db, project_id, uid)
@@ -1808,11 +1803,93 @@ def delete_project(project_id: UUID, request: Request):
         if not proj:
             raise HTTPException(404, "Project not found")
 
+        # Capture document IDs before deleting memberships,
+        # so we can remove this project_id from Solr project_ids_ss.
+        doc_ids = db.execute(
+            select(ProjectDocument.document_id)
+            .where(ProjectDocument.project_id == project_id)
+        ).scalars().all()
+
+        # Delete dependent rows first.
+        db.execute(
+            text("DELETE FROM project_document_reviews WHERE project_id = :pid"),
+            {"pid": str(project_id)},
+        )
+
+        db.execute(
+            text("DELETE FROM project_documents WHERE project_id = :pid"),
+            {"pid": str(project_id)},
+        )
+
+        db.execute(
+            text("DELETE FROM project_members WHERE project_id = :pid"),
+            {"pid": str(project_id)},
+        )
+
+        # In the current app topics are mostly user-only, but keep this safe
+        # for any older project-scoped topic rows.
+        run_ids = db.execute(
+            select(TopicRun.run_id).where(TopicRun.project_id == project_id)
+        ).scalars().all()
+
+        if run_ids:
+            db.execute(
+                text("DELETE FROM document_topics WHERE run_id = ANY(:run_ids)"),
+                {"run_ids": run_ids},
+            )
+            db.execute(
+                text("DELETE FROM topic_runs WHERE project_id = :pid"),
+                {"pid": str(project_id)},
+            )
+
         db.delete(proj)
         db.commit()
-        return {"ok": True, "project_id": str(project_id), "deleted_solr_core": False}
+
+        # Best-effort Solr cleanup: remove the deleted project_id from documents.
+        solr_docs_updated = 0
+        if doc_ids:
+            try:
+                doc_to_projects = {}
+                for did in doc_ids:
+                    # This is conservative: set membership to the remaining projects
+                    # recorded in Postgres for each document.
+                    remaining = db.execute(
+                        select(ProjectDocument.project_id)
+                        .where(ProjectDocument.document_id == did)
+                    ).scalars().all()
+                    doc_to_projects[did] = {str(pid) for pid in remaining}
+
+                solr_docs_updated = solr_set_project_membership(core, doc_to_projects)
+            except Exception as e:
+                logger.exception("Project deleted, but Solr cleanup failed: %s", e)
+
+        return {
+            "ok": True,
+            "project_id": str(project_id),
+            "project_name": proj.name,
+            "documents_removed_from_project": len(doc_ids),
+            "solr_docs_updated": solr_docs_updated,
+            "deleted_solr_core": False,
+        }
+
     finally:
         db.close()
+# @app.delete("/projects/{project_id}")
+# def delete_project(project_id: UUID, request: Request):
+#     uid = current_user_id(request)
+#     db = SessionLocal()
+#     try:
+#         assert_project_member(db, project_id, uid)
+#
+#         proj = db.get(Project, project_id)
+#         if not proj:
+#             raise HTTPException(404, "Project not found")
+#
+#         db.delete(proj)
+#         db.commit()
+#         return {"ok": True, "project_id": str(project_id), "deleted_solr_core": False}
+#     finally:
+#         db.close()
 
 # ------------------------------------------------------------------------------
 # Hypothesis helpers (patched: URL normalization + bulk resolve)

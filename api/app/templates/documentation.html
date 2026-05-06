@@ -167,60 +167,202 @@
   </p>
 </div>
 
-<div class="card">
+{#<div class="card">#}
+{#  <h2>Using Hypothesis for Review</h2>#}
+{#  <p class="muted">#}
+{#    Hypothesis is the annotation tool used alongside the platform. Reviewers use it to inspect highlighted text,#}
+{#    review model suggestions, and respond where a value needs confirmation or correction.#}
+{#  </p>#}
+{#  <p class="muted">#}
+{#    You do not need to understand the technical setup behind Hypothesis in order to use it. What matters most is#}
+{#    knowing how to open it, how to identify the correct group, and how to reply to model annotations appropriately.#}
+{#  </p>#}
+{##}
+{#  <h3>What you may see in Hypothesis</h3>#}
+{#  <ul>#}
+{#    <li><b>Highlighted text</b> where the system has identified a likely relevant passage in the document.</li>#}
+{#    <li><b>Notes without highlights</b> where the system could not reliably anchor the value to a precise quote.</li>#}
+{#    <li><b>Model-generated annotations</b> that are intended for review rather than automatic acceptance.</li>#}
+{#    <li><b>Human replies</b> showing confirmation, rejection, correction, or discussion.</li>#}
+{#  </ul>#}
+{##}
+{#  <h3>How to identify model annotations</h3>#}
+{#  <p class="muted">#}
+{#    Model annotations may be marked by tags or wording that indicate they were created by the system rather than#}
+{#    by a human reviewer. These markers help distinguish proposed values from reviewed values.#}
+{#  </p>#}
+{#  <p class="muted">#}
+{#    Depending on your setup, these may include visible tags such as source labels, model tags, run identifiers,#}
+{#    or field names. The exact appearance may vary slightly by deployment, but the purpose is the same:#}
+{#    to make it clear what has been suggested by the system and what still needs human review.#}
+{#  </p>#}
+{##}
+{#  <div class="alert">#}
+{#    <b>Remember:</b> A model annotation is usually a suggestion for review, not a final decision.#}
+{#    Reviewers should still check the underlying text before confirming it.#}
+{#  </div>#}
+{#</div>#}
+{##}
+{#<div class="card">#}
+{#  <h2>How to Review Model Annotations</h2>#}
+{#  <p class="muted">#}
+{#    The review process is designed to be simple and consistent. A reviewer’s job is to assess whether the#}
+{#    suggested value is supported by the document and, if not, to correct it clearly.#}
+{#  </p>#}
+{##}
+{#  <h3>Recommended review process</h3>#}
+{#  <ol>#}
+{#    <li>Open the document from the workspace.</li>#}
+{#    <li>Open the Hypothesis sidebar and confirm you are in the correct group.</li>#}
+{#    <li>Read the model annotation and the highlighted text (if present).</li>#}
+{#    <li>Compare the suggested value against the document text.</li>#}
+{#    <li>Decide whether the suggestion is correct, incorrect, incomplete, or unclear.</li>#}
+{#    <li>Reply appropriately using the agreed review approach for your team.</li>#}
+{#  </ol>#}
+{##}
+{#  <h3>Typical review outcomes</h3>#}
+{#  <table class="table">#}
+{#    <thead>#}
+{#      <tr>#}
+{#        <th>Outcome</th>#}
+{#        <th>Meaning</th>#}
+{#        <th>Typical reviewer action</th>#}
+{#      </tr>#}
+{#    </thead>#}
+{#    <tbody>#}
+{#      <tr>#}
+{#        <td><b>Accept</b></td>#}
+{#        <td>The suggestion is correct.</td>#}
+{#        <td>Confirm it in the thread using your team’s preferred review wording or tags.</td>#}
+{#      </tr>#}
+{#      <tr>#}
+{#        <td><b>Reject</b></td>#}
+{#        <td>The suggestion is not correct.</td>#}
+{#        <td>Explain what is wrong and, where possible, provide the corrected value.</td>#}
+{#      </tr>#}
+{#      <tr>#}
+{#        <td><b>Correct</b></td>#}
+{#        <td>The idea is close, but the value needs amending.</td>#}
+{#        <td>Reply with the corrected value and add a better highlight if needed.</td>#}
+{#      </tr>#}
+{#      <tr>#}
+{#        <td><b>Discuss</b></td>#}
+{#        <td>The case is unclear or needs a second opinion.</td>#}
+{#        <td>Reply in the thread so that the issue is visible to other reviewers or admins.</td>#}
+{#      </tr>#}
+{#    </tbody>#}
+{#  </table>#}
+{##}
+{#  <h3>Good reviewing habits</h3>#}
+{#  <ul>#}
+{#    <li>Always check the underlying text rather than relying only on the suggested label.</li>#}
+{#    <li>Use clear replies so another reviewer can understand your reasoning later.</li>#}
+{#    <li>Where possible, keep discussion attached to the same annotation thread.</li>#}
+{#    <li>Create a new annotation only if the existing one does not capture the right evidence.</li>#}
+{#  </ul>#}
+{#</div>#}
+{##}
+{#<div class="card">#}
+{#  <h2>What happens to older or rejected model annotations</h2>#}
+{#  <p class="muted">#}
+{#    In some workflows, the platform keeps Hypothesis tidy by showing only the latest model run while preserving#}
+{#    a fuller audit trail elsewhere in the system. This helps reviewers focus on the current state of the work#}
+{#    rather than being distracted by outdated suggestions.#}
+{#  </p>#}
+{#  <ul>#}
+{#    <li>Older model suggestions may be removed from view in Hypothesis.</li>#}
+{#    <li>Rejected model suggestions may be cleaned up after review.</li>#}
+{#    <li>Human comments and review history are still important for traceability.</li>#}
+{#  </ul>#}
+{#  <p class="muted">#}
+{#    The key point for reviewers is that not every historical model suggestion needs to remain visible in the#}
+{#    annotation layer for the system to retain an audit trail overall.#}
+{#  </p>#}
+{#</div>#}
+
+    <div class="card">
   <h2>Using Hypothesis for Review</h2>
-  <p class="muted">
+
+  <p>
     Hypothesis is the annotation tool used alongside the platform. Reviewers use it to inspect highlighted text,
     review model suggestions, and respond where a value needs confirmation or correction.
   </p>
-  <p class="muted">
-    You do not need to understand the technical setup behind Hypothesis in order to use it. What matters most is
-    knowing how to open it, how to identify the correct group, and how to reply to model annotations appropriately.
+
+  <p>
+    You do not need to understand the technical setup behind Hypothesis in order to use it.
+    What matters most is knowing how to open it, how to identify the correct group,
+    and how to reply to model annotations appropriately.
+  </p>
+</div>
+
+<div class="card" style="border:2px solid #dc2626; background:#fff5f5;">
+  <h2 style="color:#b91c1c;">⚠️ Critical rule: do not write in the Model Predictions group</h2>
+
+  <p style="color:#7f1d1d;">
+    The Model Predictions group is for viewing model-generated annotations only.
+    Reviewers must not create annotations, edit annotations, delete annotations, or reply to threads in this group.
   </p>
 
-  <h3>What you may see in Hypothesis</h3>
-  <ul>
-    <li><b>Highlighted text</b> where the system has identified a likely relevant passage in the document.</li>
-    <li><b>Notes without highlights</b> where the system could not reliably anchor the value to a precise quote.</li>
-    <li><b>Model-generated annotations</b> that are intended for review rather than automatic acceptance.</li>
-    <li><b>Human replies</b> showing confirmation, rejection, correction, or discussion.</li>
-  </ul>
-
-  <h3>How to identify model annotations</h3>
-  <p class="muted">
-    Model annotations may be marked by tags or wording that indicate they were created by the system rather than
-    by a human reviewer. These markers help distinguish proposed values from reviewed values.
+  <p style="color:#7f1d1d;">
+    All human review work must be done in your assigned personal workspace group.
+    Writing in the Model Predictions group may contaminate the model annotation layer and affect later syncing,
+    review, and data extraction.
   </p>
-  <p class="muted">
-    Depending on your setup, these may include visible tags such as source labels, model tags, run identifiers,
-    or field names. The exact appearance may vary slightly by deployment, but the purpose is the same:
-    to make it clear what has been suggested by the system and what still needs human review.
-  </p>
-
-  <div class="alert">
-    <b>Remember:</b> A model annotation is usually a suggestion for review, not a final decision.
-    Reviewers should still check the underlying text before confirming it.
-  </div>
 </div>
 
 <div class="card">
-  <h2>How to Review Model Annotations</h2>
-  <p class="muted">
-    The review process is designed to be simple and consistent. A reviewer’s job is to assess whether the
-    suggested value is supported by the document and, if not, to correct it clearly.
+  <h2>What you may see in Hypothesis</h2>
+
+  <ul>
+    <li>Highlighted text where the system has identified a likely relevant passage in the document.</li>
+    <li>Notes without highlights where the system could not reliably anchor the value to a precise quote.</li>
+    <li>Model-generated annotations that are intended for review rather than automatic acceptance.</li>
+    <li>Human replies showing confirmation, rejection, correction, or discussion.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>How to identify model annotations</h2>
+
+  <p>
+    Model annotations may be marked by tags or wording that indicate they were created by the system rather than by a human reviewer.
+    These markers help distinguish proposed values from reviewed values.
   </p>
 
-  <h3>Recommended review process</h3>
+  <p>
+    Depending on your setup, these may include visible tags such as source labels, model tags, run identifiers, or field names.
+    The exact appearance may vary slightly by deployment, but the purpose is the same:
+    to make it clear what has been suggested by the system and what still needs human review.
+  </p>
+
+  <p>
+    <strong>Remember:</strong> a model annotation is usually a suggestion for review, not a final decision.
+    Reviewers should always check the underlying text before confirming it.
+  </p>
+</div>
+
+<div class="card">
+  <h2>How to review model annotations</h2>
+
+  <p>
+    The review process is designed to be simple and consistent. A reviewer’s job is to assess whether the suggested value is supported by the document and, if not, to correct it clearly.
+  </p>
+
   <ol>
     <li>Open the document from the workspace.</li>
-    <li>Open the Hypothesis sidebar and confirm you are in the correct group.</li>
-    <li>Read the model annotation and the highlighted text (if present).</li>
+    <li>Open the Hypothesis sidebar.</li>
+    <li>Use the Model Predictions group only to inspect model suggestions.</li>
+    <li>Switch to your personal workspace group before adding any reply, annotation, correction, or discussion.</li>
+    <li>Read the model annotation and the highlighted text, if present.</li>
     <li>Compare the suggested value against the document text.</li>
     <li>Decide whether the suggestion is correct, incorrect, incomplete, or unclear.</li>
-    <li>Reply appropriately using the agreed review approach for your team.</li>
+    <li>Record your review in your personal workspace group using the agreed review approach for your team.</li>
   </ol>
+</div>
 
-  <h3>Typical review outcomes</h3>
+<div class="card">
+  <h2>Typical review outcomes</h2>
+
   <table class="table">
     <thead>
       <tr>
@@ -231,54 +373,77 @@
     </thead>
     <tbody>
       <tr>
-        <td><b>Accept</b></td>
+        <td><strong>Accept</strong></td>
         <td>The suggestion is correct.</td>
-        <td>Confirm it in the thread using your team’s preferred review wording or tags.</td>
+        <td>Confirm it in your personal workspace using your team’s preferred review wording or tags.</td>
       </tr>
       <tr>
-        <td><b>Reject</b></td>
+        <td><strong>Reject</strong></td>
         <td>The suggestion is not correct.</td>
         <td>Explain what is wrong and, where possible, provide the corrected value.</td>
       </tr>
       <tr>
-        <td><b>Correct</b></td>
+        <td><strong>Correct</strong></td>
         <td>The idea is close, but the value needs amending.</td>
         <td>Reply with the corrected value and add a better highlight if needed.</td>
       </tr>
       <tr>
-        <td><b>Discuss</b></td>
+        <td><strong>Discuss</strong></td>
         <td>The case is unclear or needs a second opinion.</td>
-        <td>Reply in the thread so that the issue is visible to other reviewers or admins.</td>
+        <td>Reply in your personal workspace so the issue is visible to reviewers or admins.</td>
       </tr>
     </tbody>
   </table>
+</div>
 
-  <h3>Good reviewing habits</h3>
+<div class="card">
+  <h2>Good reviewing habits</h2>
+
   <ul>
     <li>Always check the underlying text rather than relying only on the suggested label.</li>
+    <li>Check the active Hypothesis group before adding any annotation or reply.</li>
     <li>Use clear replies so another reviewer can understand your reasoning later.</li>
-    <li>Where possible, keep discussion attached to the same annotation thread.</li>
+    <li>Where possible, keep discussion attached to the same annotation thread in your personal workspace.</li>
     <li>Create a new annotation only if the existing one does not capture the right evidence.</li>
   </ul>
 </div>
 
 <div class="card">
-  <h2>What happens to older or rejected model annotations</h2>
-  <p class="muted">
-    In some workflows, the platform keeps Hypothesis tidy by showing only the latest model run while preserving
-    a fuller audit trail elsewhere in the system. This helps reviewers focus on the current state of the work
-    rather than being distracted by outdated suggestions.
+  <h2>Keeping your review data synced into the app</h2>
+
+  <p>
+    Human review data is synced into the platform from the approved Hypothesis workspace groups.
+    To make sure your review work is captured correctly:
   </p>
+
+  <ul>
+    <li>Always annotate in your assigned personal workspace group.</li>
+    <li>Do not annotate in the Model Predictions group.</li>
+    <li>Use consistent tags, values, and review wording agreed by your team.</li>
+    <li>Keep corrections attached to the relevant document and passage where possible.</li>
+    <li>If your personal workspace group is missing from the app, contact an admin before continuing review work.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>What happens to older or rejected model annotations</h2>
+
+  <p>
+    In some workflows, the platform keeps Hypothesis tidy by showing only the latest model run while preserving a fuller audit trail elsewhere in the system.
+    This helps reviewers focus on the current state of the work rather than being distracted by outdated suggestions.
+  </p>
+
   <ul>
     <li>Older model suggestions may be removed from view in Hypothesis.</li>
     <li>Rejected model suggestions may be cleaned up after review.</li>
     <li>Human comments and review history are still important for traceability.</li>
   </ul>
-  <p class="muted">
-    The key point for reviewers is that not every historical model suggestion needs to remain visible in the
-    annotation layer for the system to retain an audit trail overall.
+
+  <p>
+    The key point for reviewers is that not every historical model suggestion needs to remain visible in the annotation layer for the system to retain an audit trail overall.
   </p>
 </div>
+
 
 <div class="card">
   <h2>Understanding Exports</h2>

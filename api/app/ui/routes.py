@@ -136,28 +136,6 @@ async def asgi_post_json(request: Request, path: str, payload: dict, *, timeout_
     return r.json() if r.content else None
 
 
-# async def asgi_patch(request: Request, path: str, *, timeout_s: float = 60.0):
-#     """
-#     Internal ASGI PATCH helper that forwards cookies, pooled.
-#     """
-#     client: httpx.AsyncClient = request.app.state.asgi_client
-#     headers = _forward_cookie_headers(request)
-#
-#     r = await client.patch(path, headers=headers, timeout=timeout_s)
-#     try:
-#         r.raise_for_status()
-#     except httpx.HTTPStatusError as e:
-#         snippet = (r.text or "")[:2000]
-#         raise httpx.HTTPStatusError(
-#             message=f"ASGI PATCH failed: {r.status_code} {path} body={snippet}",
-#             request=e.request,
-#             response=e.response,
-#         ) from e
-#
-#     if (r.headers.get("content-type") or "").startswith("application/json"):
-#         return r.json()
-#     return {"ok": True}
-
 async def asgi_patch(
     request: Request,
     path: str,
@@ -175,6 +153,31 @@ async def asgi_patch(
         snippet = (r.text or "")[:2000]
         raise httpx.HTTPStatusError(
             message=f"ASGI PATCH failed: {r.status_code} {path} body={snippet}",
+            request=e.request,
+            response=e.response,
+        ) from e
+
+    if (r.headers.get("content-type") or "").startswith("application/json"):
+        return r.json()
+    return {"ok": True}
+
+
+async def asgi_delete(
+    request: Request,
+    path: str,
+    *,
+    timeout_s: float = 60.0,
+):
+    client: httpx.AsyncClient = request.app.state.asgi_client
+    headers = _forward_cookie_headers(request)
+
+    r = await client.delete(path, headers=headers, timeout=timeout_s)
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        snippet = (r.text or "")[:2000]
+        raise httpx.HTTPStatusError(
+            message=f"ASGI DELETE failed: {r.status_code} {path} body={snippet}",
             request=e.request,
             response=e.response,
         ) from e
@@ -729,6 +732,7 @@ async def ui_search(
                 {
                     "request": request,
                     "user": user,
+                    "message": request.query_params.get("msg"),
                     "core": core,
                     "project_id": project_id,
                     "project_name": project_name,
@@ -852,6 +856,7 @@ async def ui_search(
         {
             "request": request,
             "user": user,
+            "message": request.query_params.get("msg"),
             "core": core,
             "project_id": project_id,
             "project_name": project_name,
@@ -943,47 +948,61 @@ async def ui_add_to_project_post(
         },
     )
 
+@router.post("/projects/add_search_results")
+async def ui_add_search_results_to_project(
+    request: Request,
+    document_ids_text: List[str] = Form(default=[]),
+    next: str | None = Form(None),
+    user=Depends(require_paid_user),
+):
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse(
+            "/ui/dashboard?msg=Please%20select%20a%20project%20first",
+            status_code=303,
+        )
 
-# @router.post("/projects/add_one")
-# async def ui_add_one_from_search(
-#     request: Request,
-#     document_id: str = Form(...),
-#     next: str | None = Form(None),
-#     # user=Depends(require_role("admin", "reviewer")),
-#     user=Depends(require_paid_user)
-# ):
-#     # project_id = await _ensure_project_selected(request)
-#     project_id = _get_project_id(request)
-#     if not project_id:
-#         return RedirectResponse("/ui/dashboard", status_code=303)
-#
-#     await asgi_post_json(
-#         request,
-#         f"/projects/{project_id}/documents/add",
-#         {"document_ids": [document_id]},
-#     )
-#
-#     core = (request.query_params.get("core") or request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip()
-#     if not core:
-#         core = "hitl_test"
-#     request.session["core"] = core
-#
-#     if next:
-#         try:
-#             target = urllib.parse.unquote(next)
-#             if target.startswith("/"):
-#                 return RedirectResponse(target, status_code=303)
-#             u = urllib.parse.urlparse(target)
-#             if u.scheme in ("http", "https") and (u.netloc == "" or u.netloc == "app" or u.netloc == "localhost:8000"):
-#                 return RedirectResponse(target, status_code=303)
-#         except Exception:
-#             pass
-#
-#     ref = request.headers.get("referer")
-#     if ref:
-#         return RedirectResponse(ref, status_code=303)
-#
-#     return RedirectResponse(f"/ui/search?core={core}", status_code=303)
+    ids = [
+        x.strip()
+        for x in (document_ids_text or [])
+        if x and x.strip()
+    ]
+
+    seen = set()
+    ids = [x for x in ids if not (x in seen or seen.add(x))]
+
+    if not ids:
+        return RedirectResponse(
+            "/ui/search?msg=No%20documents%20found%20to%20add",
+            status_code=303,
+        )
+
+    res = await asgi_post_json(
+        request,
+        f"/projects/{project_id}/documents/add",
+        {"document_ids": ids},
+    )
+
+    added = res.get("docs_added", 0)
+    queued = res.get("solr_update_queued", False)
+
+    msg = f"Added {added} document(s) to project"
+    if queued:
+        msg += ". Search index update queued."
+
+    if next:
+        sep = "&" if "?" in next else "?"
+        return RedirectResponse(
+            f"{next}{sep}msg={urllib.parse.quote(msg)}",
+            status_code=303,
+        )
+
+    return RedirectResponse(
+        f"/ui/search?msg={urllib.parse.quote(msg)}",
+        status_code=303,
+    )
+
+
 @router.post("/projects/add_one")
 async def ui_add_one_from_search(
     request: Request,
@@ -1623,16 +1642,47 @@ async def ui_create_project(
 #
 #
 #
+# @router.get("/settings/hypothesis", response_class=HTMLResponse)
+# async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_user)):
+#     groups_res = await asgi_get(request, "/hypothesis/groups", params={})
+#     workspace_res = await asgi_get(request, "/hypothesis/workspace", params={})
+#
+#     groups = groups_res.get("groups", []) or []
+#     current_gid = workspace_res.get("group_id")
+#
+#     # (optional) hide public
+#     groups = [g for g in groups if not g.get("is_public")]
+#
+#     return request.app.state.templates.TemplateResponse(
+#         "hypothesis_settings.html",
+#         {
+#             "request": request,
+#             "user": user,
+#             "groups": groups,
+#             "current_gid": current_gid,
+#         },
+#     )
 @router.get("/settings/hypothesis", response_class=HTMLResponse)
 async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_user)):
-    groups_res = await asgi_get(request, "/hypothesis/groups", params={})
     workspace_res = await asgi_get(request, "/hypothesis/workspace", params={})
-
-    groups = groups_res.get("groups", []) or []
     current_gid = workspace_res.get("group_id")
 
-    # (optional) hide public
-    groups = [g for g in groups if not g.get("is_public")]
+    role = (user.get("role") or "").lower()
+    is_admin = role == "admin"
+
+    groups = []
+
+    if is_admin:
+        groups_res = await asgi_get(request, "/hypothesis/groups", params={})
+        groups = groups_res.get("groups", []) or []
+        groups = [g for g in groups if not g.get("is_public")]
+    elif current_gid:
+        groups_res = await asgi_get(request, "/hypothesis/groups", params={})
+        all_groups = groups_res.get("groups", []) or []
+        groups = [
+            g for g in all_groups
+            if g.get("group_id") == current_gid
+        ]
 
     return request.app.state.templates.TemplateResponse(
         "hypothesis_settings.html",
@@ -1641,9 +1691,20 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
             "user": user,
             "groups": groups,
             "current_gid": current_gid,
+            "is_admin": is_admin,
+            "message": request.query_params.get("msg"),
         },
     )
 
+# @router.post("/settings/hypothesis")
+# async def ui_hypothesis_settings_save(
+#     request: Request,
+#     group_id: str = Form(...),
+#     user=Depends(require_paid_user),
+# ):
+#     gid = (group_id or "").strip()
+#     await asgi_post_json(request, "/hypothesis/workspace", {"group_id": gid})
+#     return RedirectResponse("/ui/settings/hypothesis?msg=saved", status_code=303)
 
 @router.post("/settings/hypothesis")
 async def ui_hypothesis_settings_save(
@@ -1651,9 +1712,18 @@ async def ui_hypothesis_settings_save(
     group_id: str = Form(...),
     user=Depends(require_paid_user),
 ):
+    role = (user.get("role") or "").lower()
+
+    if role != "admin":
+        return RedirectResponse(
+            "/ui/settings/hypothesis?msg=Only%20an%20admin%20can%20change%20workspace%20assignments",
+            status_code=303,
+        )
+
     gid = (group_id or "").strip()
     await asgi_post_json(request, "/hypothesis/workspace", {"group_id": gid})
-    return RedirectResponse("/ui/settings/hypothesis?msg=saved", status_code=303)
+    return RedirectResponse("/ui/settings/hypothesis?msg=Workspace%20saved", status_code=303)
+
 
 @router.get("/hypothesis/access", response_class=HTMLResponse)
 async def ui_hypothesis_access(request: Request, user=Depends(require_user)):
@@ -1665,6 +1735,7 @@ async def ui_hypothesis_access(request: Request, user=Depends(require_user)):
     # direct group pages (work even without a document URL)
     model_group_url = f"https://hypothes.is/groups/{model_gid}/model-predictions"
     gold_group_url = f"https://hypothes.is/groups/{gold_gid}/gold-annotations"
+    model_invite_url = f"https://hypothes.is/groups/{model_gid}/model-predictions"
 
     # workspace selection page you added earlier
     workspace_settings_url = "/ui/settings/hypothesis"
@@ -1678,6 +1749,7 @@ async def ui_hypothesis_access(request: Request, user=Depends(require_user)):
             "gold_gid": gold_gid,
             "model_group_url": model_group_url,
             "gold_group_url": gold_group_url,
+            "model_invite_url": model_invite_url,
             "workspace_settings_url": workspace_settings_url,
         },
     )
@@ -1785,3 +1857,40 @@ async def ui_projects_update(
         status_code=303,
     )
 
+@router.post("/projects/{project_id}/delete")
+async def ui_projects_delete(
+    request: Request,
+    project_id: str,
+    confirm_project_name: str = Form(...),
+    user=Depends(require_paid_user),
+):
+    # Fetch the project first so we can verify exact-name confirmation.
+    try:
+        proj = await asgi_get(request, f"/projects/{project_id}", params={})
+    except Exception:
+        return RedirectResponse(
+            "/ui/dashboard?msg=Project%20not%20found",
+            status_code=303,
+        )
+
+    actual_name = (proj.get("name") or "").strip()
+    typed_name = (confirm_project_name or "").strip()
+
+    if typed_name != actual_name:
+        return RedirectResponse(
+            f"/ui/dashboard?msg=Delete%20cancelled:%20project%20name%20did%20not%20match",
+            status_code=303,
+        )
+
+    await asgi_delete(request, f"/projects/{project_id}")
+
+    # Clear selected project if the deleted project was active.
+    if _get_project_id(request) == project_id:
+        request.session.pop("project_id", None)
+        request.session.pop("project_name", None)
+        request.session.pop("topic_run_id", None)
+
+    return RedirectResponse(
+        "/ui/dashboard?msg=Project%20deleted",
+        status_code=303,
+    )
