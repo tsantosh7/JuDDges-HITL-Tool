@@ -179,7 +179,7 @@
   <div style="min-width:280px; flex:1; max-width:920px;">
 
 <div class="card" style="border-left:4px solid #dc2626; background:#fff5f5;">
-  <h3 style="color:#b91c1c;">⚠️ Check your Hypothesis group before annotating</h3>
+  <h3 style="color:#b91c1c;">Check your Hypothesis group before annotating</h3>
 
   <p style="color:#7f1d1d;">
     Use the Model Predictions group only to view model annotations.
@@ -187,7 +187,7 @@
   </p>
 
   <p style="color:#7f1d1d;">
-    For your own review work, switch to your personal workspace group in the Hypothesis sidebar.
+    For review work, switch to this project’s review group in the Hypothesis sidebar.
   </p>
 </div>
 
@@ -202,11 +202,11 @@
                target="_blank"
                rel="noopener"
                style="font-weight:600;">
-              Annotate in My Workspace
+              Annotate in Project Review Group
             </a>
           {% else %}
             <a class="btnlink" href="/ui/settings/hypothesis" style="font-weight:600;">
-              Set My Workspace
+              Set Project Review Group
             </a>
           {% endif %}
 
@@ -233,18 +233,18 @@
           </a>
 
           {% if workspace_group %}
-            <a class="btnlink" href="/ui/hypothesis/sync_workspace">Sync My Workspace</a>
+            <a class="btnlink" href="/ui/hypothesis/sync_workspace">Sync Project Review Group</a>
           {% endif %}
         </div>
 
         {% if workspace_group %}
           <div class="muted" style="font-size:12px; margin-top:8px;">
-            Workspace: {{ workspace_group.name }} ({{ workspace_group.group_id }})
+            Project review group: {{ workspace_group.name }} ({{ workspace_group.group_id }})
             {% if workspace_group.last_synced_at %}
               - last synced {{ workspace_group.last_synced_at }}
             {% endif %}
             {% if not workspace_group.is_enabled %}
-              - visible for annotation links; not enabled for server-side sync yet.
+              - visible for annotation links; server access has not been confirmed yet.
             {% endif %}
           </div>
         {% endif %}
@@ -252,7 +252,7 @@
         {% if workspace_annotations and workspace_annotations|length > 0 %}
           <div style="margin-top:10px;">
             <div class="muted" style="font-size:12px; font-weight:600; margin-bottom:6px;">
-              Synced annotations from my workspace
+              Synced annotations from the project review group
             </div>
             {% for a in workspace_annotations %}
               <div style="border-top:1px solid #e5e7eb; padding-top:8px; margin-top:8px;">
@@ -274,7 +274,7 @@
           </div>
         {% elif workspace_group and workspace_group.is_enabled %}
           <div class="muted" style="font-size:12px; margin-top:8px;">
-            No synced annotations from your workspace for this document yet.
+            No synced annotations from the project review group for this document yet.
           </div>
         {% endif %}
 
@@ -302,7 +302,7 @@
         </div>
         <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:10px;">
           <a class="btnlink" href="/ui/hypothesis/access">Fix access</a>
-          <a class="btnlink" href="/ui/settings/hypothesis">Set My Workspace</a>
+          <a class="btnlink" href="/ui/settings/hypothesis">Set Project Review Group</a>
         </div>
       </div>
     {% endif %}

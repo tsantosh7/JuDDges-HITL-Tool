@@ -17,7 +17,7 @@
     <label class="muted">Coding source</label>
     <select name="source">
       <option value="reviewed" {% if source == "reviewed" %}selected{% endif %}>Final reviewed dataset</option>
-      <option value="human" {% if source == "human" %}selected{% endif %}>Human workspace only</option>
+      <option value="human" {% if source == "human" %}selected{% endif %}>Human review only</option>
       <option value="gold" {% if source == "gold" %}selected{% endif %}>Gold only</option>
       <option value="model" {% if source == "model" %}selected{% endif %}>AI only</option>
       <option value="all" {% if source == "all" %}selected{% endif %}>Human + gold + AI</option>

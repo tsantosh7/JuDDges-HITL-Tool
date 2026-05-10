@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 
-<h1>Sync My Workspace</h1>
+<h1>Sync Project Review Group</h1>
 
 <div class="card">
   <div class="muted" style="font-size:12px; margin-bottom:8px;">
@@ -9,14 +9,14 @@
     <span class="mono">({{ project_id }})</span>
   </div>
   <div class="muted" style="font-size:12px; margin-bottom:12px;">
-    Workspace group: <span class="mono">{{ group_id }}</span>
+    Project review group: <span class="mono">{{ group_id }}</span>
   </div>
 
   <div style="height:14px; background:#e5e7eb; border-radius:7px; overflow:hidden;">
     <div id="sync-bar" style="height:14px; width:0%; background:#2563eb;"></div>
   </div>
 
-  <div id="sync-status" class="muted" style="margin-top:12px;">Preparing workspace...</div>
+  <div id="sync-status" class="muted" style="margin-top:12px;">Preparing project review group...</div>
 
   <div class="meta" style="margin-top:12px;">
     <span class="pill">documents: <span id="sync-docs">0/0</span></span>
@@ -28,7 +28,7 @@
   <pre id="sync-log" class="mono" style="white-space:pre-wrap; margin-top:12px; max-height:260px; overflow:auto;"></pre>
 
   <div class="row" style="gap:10px; margin-top:12px;">
-    <a class="btnlink" href="/ui/settings/hypothesis">Workspace settings</a>
+    <a class="btnlink" href="/ui/settings/hypothesis">Review group settings</a>
     <a class="btnlink" href="/ui/search">Back to search</a>
   </div>
 </div>
@@ -90,8 +90,8 @@ function updateProgress(data) {
 async function runSync() {
   try {
     bar.style.width = "3%";
-    statusEl.textContent = "Copying model suggestions and gold references into your workspace...";
-    logLine("Preparing workspace review items...");
+    statusEl.textContent = "Copying model suggestions and gold references into the project review group...";
+    logLine("Preparing project review items...");
     const prepareResponse = await fetch("/hypothesis/prepare_workspace", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -102,13 +102,13 @@ async function runSync() {
       throw new Error(errorText(prepareData, "Workspace preparation failed: " + prepareResponse.status));
     }
     logLine(
-      "Prepared workspace: " +
+      "Prepared project review group: " +
       (prepareData.created_model_suggestions || 0) + " model suggestions copied, " +
       (prepareData.created_gold_references || 0) + " gold references copied, " +
       (prepareData.skipped_existing_model_suggestions || 0) + " existing suggestions skipped."
     );
     bar.style.width = "8%";
-    statusEl.textContent = "Syncing your workspace back to the server...";
+    statusEl.textContent = "Syncing the project review group back to the server...";
 
     const response = await fetch("/hypothesis/sync_stream", {
       method: "POST",

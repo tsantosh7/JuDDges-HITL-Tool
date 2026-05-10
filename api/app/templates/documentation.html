@@ -90,17 +90,17 @@
 
   <h3>5) Review Coding</h3>
   <p class="muted">
-    The platform can copy model suggestions and gold reference annotations into your own Hypothesis workspace
-    for the selected project. The original model and gold groups are not exposed for editing. Your workspace is
+    The platform can copy model suggestions and gold reference annotations into the project review group
+    for the selected project. The original model and gold groups are not exposed for editing. The project review group is
     where you review, reject, correct, and add annotations.
   </p>
   <p class="muted">
     If a copied model suggestion is correct, you do not need to accept it manually. Leaving it unchanged means it
     is treated as an implicit accept during export. If it is wrong, add a rejection or correction in your
-    workspace. This keeps the review workload low and preserves the original model and gold records.
+    project review group. This keeps the review workload low and preserves the original model and gold records.
   </p>
   <p class="muted">
-    For private Hypothesis groups, the server Hypothesis account must be a member of your workspace group before
+    For private Hypothesis groups, the server Hypothesis account must be a member of the project review group before
     it can copy model suggestions or gold references into that group. This is a Hypothesis permission rule.
   </p>
 
@@ -126,7 +126,7 @@
     <li><b>Select the correct project</b> from the project area.</li>
     <li><b>Open Search Documents</b> and locate a case you want to review.</li>
     <li><b>Open the document</b> and read the excerpt or case text.</li>
-    <li><b>Sync your workspace</b> so model suggestions and gold references are copied into your Hypothesis group.</li>
+    <li><b>Sync the project review group</b> so model suggestions and gold references are copied into Hypothesis.</li>
     <li><b>Open Hypothesis</b> and review the copied suggestions in your own group.</li>
     <li><b>Check the coding</b>: leave correct suggestions unchanged, and only reject, correct, or add values where needed.</li>
     <li><b>Return to the workspace</b> and continue with the next document.</li>
@@ -134,7 +134,7 @@
   </ol>
 
   <div class="alert">
-    <b>Important:</b> If you cannot see annotations in Hypothesis, first sync your workspace for the selected
+    <b>Important:</b> If you cannot see annotations in Hypothesis, first sync the project review group for the selected
     project. Then make sure Hypothesis is showing your personal group rather than “Public” or another group.
   </div>
 </div>
@@ -304,7 +304,7 @@
 </div>
 
 <div class="card" style="border:2px solid #dc2626; background:#fff5f5;">
-  <h2 style="color:#b91c1c;">⚠️ Critical rule: do not write in the Model Predictions group</h2>
+  <h2 style="color:#b91c1c;">Critical rule: do not write in the Model Predictions group</h2>
 
   <p style="color:#7f1d1d;">
     The Model Predictions group is for viewing model-generated annotations only.
@@ -312,7 +312,7 @@
   </p>
 
   <p style="color:#7f1d1d;">
-    All human review work must be done in your assigned personal workspace group.
+    All human review work must be done in the project review group.
     Writing in the Model Predictions group may contaminate the model annotation layer and affect later syncing,
     review, and data extraction.
   </p>
@@ -360,11 +360,11 @@
     <li>Open the document from the workspace.</li>
     <li>Open the Hypothesis sidebar.</li>
     <li>Use the Model Predictions group only to inspect model suggestions.</li>
-    <li>Switch to your personal workspace group before adding any reply, annotation, correction, or discussion.</li>
+    <li>Switch to the project review group before adding any reply, annotation, correction, or discussion.</li>
     <li>Read the model annotation and the highlighted text, if present.</li>
     <li>Compare the suggested value against the document text.</li>
     <li>Decide whether the suggestion is correct, incorrect, incomplete, or unclear.</li>
-    <li>Record your review in your personal workspace group using the agreed review approach for your team.</li>
+    <li>Record your review in the project review group using the agreed review approach for your team.</li>
   </ol>
 </div>
 
@@ -383,7 +383,7 @@
       <tr>
         <td><strong>Accept</strong></td>
         <td>The suggestion is correct.</td>
-        <td>Confirm it in your personal workspace using your team’s preferred review wording or tags.</td>
+        <td>No action is required. Leaving the copied suggestion unchanged means it is implicitly accepted for export.</td>
       </tr>
       <tr>
         <td><strong>Reject</strong></td>
@@ -398,7 +398,7 @@
       <tr>
         <td><strong>Discuss</strong></td>
         <td>The case is unclear or needs a second opinion.</td>
-        <td>Reply in your personal workspace so the issue is visible to reviewers or admins.</td>
+        <td>Reply in the project review group so the issue is visible to reviewers or admins.</td>
       </tr>
     </tbody>
   </table>
@@ -411,7 +411,7 @@
     <li>Always check the underlying text rather than relying only on the suggested label.</li>
     <li>Check the active Hypothesis group before adding any annotation or reply.</li>
     <li>Use clear replies so another reviewer can understand your reasoning later.</li>
-    <li>Where possible, keep discussion attached to the same annotation thread in your personal workspace.</li>
+    <li>Where possible, keep discussion attached to the same annotation thread in the project review group.</li>
     <li>Create a new annotation only if the existing one does not capture the right evidence.</li>
   </ul>
 </div>
@@ -420,16 +420,16 @@
   <h2>Keeping your review data synced into the app</h2>
 
   <p>
-    Human review data is synced into the platform from the approved Hypothesis workspace groups.
+    Human review data is synced into the platform from the approved project review group.
     To make sure your review work is captured correctly:
   </p>
 
   <ul>
-    <li>Always annotate in your assigned personal workspace group.</li>
+    <li>Always annotate in the selected project review group.</li>
     <li>Do not annotate in the Model Predictions group.</li>
     <li>Use consistent tags, values, and review wording agreed by your team.</li>
     <li>Keep corrections attached to the relevant document and passage where possible.</li>
-    <li>If your personal workspace group is missing from the app, contact an admin before continuing review work.</li>
+    <li>If the project review group is missing from the app, contact an admin before continuing review work.</li>
   </ul>
 </div>
 
@@ -526,8 +526,8 @@
 
   <h3>I opened a document but I cannot see annotations.</h3>
   <p class="muted">
-    Check that you have selected a project and run <b>Sync My Workspace</b>. The sync copies only annotations for
-    documents in the selected project into your personal Hypothesis group. Then check that Hypothesis is open and
+    Check that you have selected a project and run <b>Sync Project Review Group</b>. The sync copies only annotations for
+    documents in the selected project into the project review group. Then check that Hypothesis is open and
     showing your group.
   </p>
 

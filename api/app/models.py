@@ -71,6 +71,20 @@ class ProjectDocument(Base):
     document = relationship("Document")
 
 
+class ProjectHypothesisReviewGroup(Base):
+    __tablename__ = "project_hypothesis_review_groups"
+
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), primary_key=True)
+    group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), nullable=False)
+    created_by = Column(String, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project")
+    group = relationship("HypothesisGroup")
+
+
 class HypothesisGroup(Base):
     __tablename__ = "hypothesis_groups"
 

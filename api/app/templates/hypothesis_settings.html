@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 
-<h1>Hypothesis workspace</h1>
+<h1>Project Review Workspace</h1>
 
 {% if message %}
   <div class="alert">{{ "Saved" if message == "saved" else message }}</div>
@@ -9,40 +9,44 @@
 
 <div class="card">
   <p class="muted">
-    Choose the <strong>private</strong> Hypothesis group where <strong>your</strong> annotations should go.
-    This prevents your codes from mixing with the model baseline or gold annotations.
+    Choose the <strong>private</strong> Hypothesis group where this project will be reviewed.
+    Model suggestions and gold references are copied into this group without exposing the original source groups.
   </p>
+  <div class="muted" style="font-size:12px; margin-bottom:12px;">
+    Project: <strong>{{ project_name or project_id }}</strong>
+    <span class="mono">({{ project_id }})</span>
+  </div>
 
   {% if current_gid %}
     <div class="alert" style="margin-top:10px;">
-      Current workspace:
+      Current project review group:
       <strong>{{ (current_group.name if current_group else current_gid) or current_gid }}</strong>
       <span class="mono">({{ current_gid }})</span>
       {% if current_group and current_group.last_synced_at %}
         <span class="muted">Last synced: {{ current_group.last_synced_at }}</span>
       {% endif %}
       {% if current_group and not current_group.is_enabled %}
-        <span class="muted">Not enabled for server-side sync yet.</span>
+        <span class="muted">The server account has not confirmed access yet.</span>
       {% endif %}
     </div>
   {% endif %}
 
   <form method="post" action="/ui/settings/hypothesis" style="margin-top:12px;">
     <div class="grow">
-      <label class="muted">Paste your Hypothesis group link or ID</label>
+      <label class="muted">Paste the project Hypothesis group link or ID</label>
       <input class="grow"
              name="group_ref"
-             placeholder="https://hypothes.is/groups/abc123/my-workspace"
+             placeholder="https://hypothes.is/groups/abc123/project-review"
              value="">
       <div class="muted" style="font-size:12px; margin-top:6px;">
-        You can paste the private group URL immediately after creating it in Hypothesis. To copy model suggestions
-        and gold references into this group, the configured server Hypothesis account must also be invited to the group.
+        The configured server Hypothesis account must be a member of this group so it can copy model suggestions
+        and gold references into the project review workspace.
       </div>
     </div>
 
     {% if groups and groups|length > 0 %}
       <div class="grow" style="margin-top:12px;">
-        <label class="muted">Or choose a synced group</label>
+        <label class="muted">Or choose a server-accessible group</label>
         <select name="group_id" class="grow">
           <option value="" {% if not current_gid %}selected{% endif %}>Select a group...</option>
         {% for g in groups %}
@@ -56,12 +60,12 @@
       </div>
     {% endif %}
 
-    <button type="submit" class="btnlink" style="margin-top:12px;">Save Workspace</button>
+    <button type="submit" class="btnlink" style="margin-top:12px;">Save Project Review Group</button>
   </form>
 
   {% if current_gid %}
     <div style="margin-top:12px;">
-      <a class="btnlink" href="/ui/hypothesis/sync_workspace">Sync My Workspace</a>
+      <a class="btnlink" href="/ui/hypothesis/sync_workspace">Sync Project Review Group</a>
     </div>
   {% endif %}
 </div>
@@ -71,7 +75,7 @@
   <ul class="muted" style="margin-top:6px;">
     <li><strong>Model predictions</strong>: shared group (read for everyone)</li>
     <li><strong>Gold annotations</strong>: shared group, restricted membership</li>
-    <li><strong>My workspace</strong>: private group with you and the server Hypothesis account that copies review items</li>
+    <li><strong>Project review workspace</strong>: private group with the reviewers and the server Hypothesis account</li>
   </ul>
 </div>
 

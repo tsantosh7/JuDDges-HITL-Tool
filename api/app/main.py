@@ -57,7 +57,7 @@ from .db import SessionLocal
 from .init_db import init
 from .models import (
     Team, Project, Document, ProjectDocument,
-    HypothesisGroup, HypothesisAnnotation, UserHypothesisWorkspace,
+    HypothesisGroup, HypothesisAnnotation, UserHypothesisWorkspace, ProjectHypothesisReviewGroup,
     Code, CodeAlias, ProjectDocumentReview, TopicRun, DocumentTopic, DocEmbedding,
 )
 
@@ -129,6 +129,7 @@ _SOLR_NEEDS_QUOTES = re.compile(r"""[\s:\[\]\(\)\{\}"'\\]""")
 # Hypothesis public group safety (NEVER sync __world__ unless explicitly requested)
 HYPOTHESIS_PUBLIC_GROUP_ID = "__world__"
 HYPOTHESIS_EXCLUDE_PUBLIC = os.getenv("HYPOTHESIS_EXCLUDE_PUBLIC", "true").lower() == "true"
+HUMAN_REVIEW_GROUP_ROLES = ("human_workspace", "project_review")
 
 
 def _env_group_ids(*names: str) -> set[str]:
@@ -161,8 +162,10 @@ def infer_hypothesis_group_role(group_id: str | None) -> str:
 
 def source_type_for_group_role(group_role: str | None) -> str:
     role = (group_role or "unknown").strip()
-    if role in {"model", "gold", "model_suggestion", "human_workspace"}:
-        return role if role != "human_workspace" else "human"
+    if role in {"model", "gold", "model_suggestion"}:
+        return role
+    if role in HUMAN_REVIEW_GROUP_ROLES:
+        return "human"
     return "unknown"
 
 
@@ -188,6 +191,9 @@ def seed_hypothesis_group_roles(db) -> None:
         "model": False,
         "gold": True,
         "model_suggestion": False,
+        "project_review": True,
+        "human_workspace": True,
+        "unknown": False,
         "public": False,
     }
     known_ids = set()
@@ -2169,7 +2175,7 @@ def upsert_group(db, g: dict) -> HypothesisGroup:
     is_public = (gid == HYPOTHESIS_PUBLIC_GROUP_ID) or bool(g.get("public"))
     default_enabled = (not is_public)
     inferred_role = infer_hypothesis_group_role(gid)
-    default_exportable = inferred_role in {"human_workspace", "gold"}
+    default_exportable = inferred_role in {*HUMAN_REVIEW_GROUP_ROLES, "gold"}
 
     row = db.get(HypothesisGroup, gid)
     if not row:
@@ -2487,8 +2493,8 @@ def hypothesis_create_annotation(payload: dict) -> dict:
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    "The server Hypothesis account is not allowed to create annotations in this workspace group. "
-                    "Invite the server Hypothesis account to the private group, then run Sync My Workspace again."
+                    "The server Hypothesis account is not allowed to create annotations in this project review group. "
+                    "Invite the server Hypothesis account to the project review group, then run sync again."
                 ),
             )
         raise HTTPException(status_code=500, detail=f"Hypothesis create failed: {r.status_code} {r.text[:800]}")
@@ -2528,7 +2534,7 @@ def prepare_model_suggestion_payload(
         f"Code: {code}\n"
         f"Suggested value: {value}\n\n"
         "If this is correct, leave it unchanged. To reject or correct it, add your own review annotation "
-        "or reply with review:reject / review:corrected in this workspace."
+        "or reply with review:reject / review:corrected in the project review group."
     )
     return sid, {
         "group": group_id,
@@ -2572,7 +2578,7 @@ def prepare_model_annotation_payload(
         "[MODEL SUGGESTION]\n"
         f"{annotation.text or annotation.exact or ''}\n\n"
         "If this is correct, leave it unchanged. To reject or correct it, add your own review annotation "
-        "or reply with review:reject / review:corrected in this workspace."
+        "or reply with review:reject / review:corrected in the project review group."
     )
     payload = {
         "group": group_id,
@@ -2629,7 +2635,7 @@ def prepare_gold_reference_payload(
     text = (
         "[GOLD REFERENCE]\n"
         f"{annotation.text or annotation.exact or ''}\n\n"
-        "This is copied into your workspace as read-only reference material. It is not counted as your human annotation."
+        "This is copied into the project review group as reference material. It is not counted as your human annotation."
     )
     payload = {
         "group": group_id,
@@ -2975,13 +2981,13 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
     try:
         assert_project_member(db, payload.project_id, uid)
 
-        workspace = db.get(UserHypothesisWorkspace, uid)
-        if not workspace or workspace.group_id != payload.group_id:
-            raise HTTPException(403, "Can only prepare your own Hypothesis workspace")
+        review_group = db.get(ProjectHypothesisReviewGroup, payload.project_id)
+        if not review_group or review_group.group_id != payload.group_id:
+            raise HTTPException(403, "Can only prepare the configured project review group")
 
         group = db.get(HypothesisGroup, payload.group_id)
         if not group:
-            raise HTTPException(404, "Workspace group not found")
+            raise HTTPException(404, "Project review group not found")
 
         profile = hypothesis_get_profile()
         server_userid = hypothesis_profile_userid(profile)
@@ -2989,10 +2995,10 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    f"The server Hypothesis account ({server_userid}) cannot access workspace group "
+                    f"The server Hypothesis account ({server_userid}) cannot access project review group "
                     f"{payload.group_id}. Hypothesis only allows the server to copy model/gold review items "
-                    "into private groups where that account is a member. Invite that account to the group, "
-                    "then run Sync My Workspace again."
+                    "into private groups where that account is a member. Invite that account to the project review group, "
+                    "then run sync again."
                 ),
             )
 
@@ -3206,13 +3212,13 @@ def recompute_solr_codes(
         )
 
         if source == "human":
-            stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+            stmt = stmt.where(HypothesisGroup.group_role.in_(HUMAN_REVIEW_GROUP_ROLES))
             stmt = stmt.where(HypothesisAnnotation.source_type == "human")
         elif source == "gold":
             stmt = stmt.where(HypothesisGroup.group_role == "gold")
             stmt = stmt.where(HypothesisAnnotation.source_type == "gold")
         else:
-            stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
+            stmt = stmt.where(HypothesisGroup.group_role.in_([*HUMAN_REVIEW_GROUP_ROLES, "gold"]))
             stmt = stmt.where(HypothesisAnnotation.source_type.in_(["human", "gold"]))
 
         if group_id:
@@ -3555,7 +3561,7 @@ def collect_rejected_review_codes(
         select(HypothesisAnnotation.document_id, HypothesisAnnotation.tags)
         .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
         .where(HypothesisAnnotation.document_id.in_(doc_ids))
-        .where(HypothesisGroup.group_role == "human_workspace")
+        .where(HypothesisGroup.group_role.in_(HUMAN_REVIEW_GROUP_ROLES))
         .where(HypothesisAnnotation.source_type == "human")
     )
 
@@ -3612,13 +3618,13 @@ def build_wide_aggregates(
     )
 
     if source_filter == "human":
-        stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+        stmt = stmt.where(HypothesisGroup.group_role.in_(HUMAN_REVIEW_GROUP_ROLES))
         stmt = stmt.where(HypothesisAnnotation.source_type == "human")
     elif source_filter == "gold":
         stmt = stmt.where(HypothesisGroup.group_role == "gold")
         stmt = stmt.where(HypothesisAnnotation.source_type == "gold")
     else:
-        stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
+        stmt = stmt.where(HypothesisGroup.group_role.in_([*HUMAN_REVIEW_GROUP_ROLES, "gold"]))
         stmt = stmt.where(HypothesisAnnotation.source_type.in_(["human", "gold"]))
 
     for doc_id, tags, text, updated in db.execute(stmt).yield_per(5000):
@@ -3857,13 +3863,13 @@ def export_csv(
                 )
 
                 if source == "human":
-                    stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+                    stmt = stmt.where(HypothesisGroup.group_role.in_(HUMAN_REVIEW_GROUP_ROLES))
                     stmt = stmt.where(HypothesisAnnotation.source_type == "human")
                 elif source == "gold":
                     stmt = stmt.where(HypothesisGroup.group_role == "gold")
                     stmt = stmt.where(HypothesisAnnotation.source_type == "gold")
                 else:
-                    stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
+                    stmt = stmt.where(HypothesisGroup.group_role.in_([*HUMAN_REVIEW_GROUP_ROLES, "gold"]))
                     stmt = stmt.where(HypothesisAnnotation.source_type.in_(["human", "gold"]))
 
                 for doc_id, tags, text, exact, user_, updated, group_role in db.execute(stmt).yield_per(5000):
@@ -6652,6 +6658,12 @@ class WorkspaceSetIn(BaseModel):
     group_name: Optional[str] = None
 
 
+class ProjectReviewGroupSetIn(BaseModel):
+    project_id: UUID
+    group_id: str
+    group_name: Optional[str] = None
+
+
 def normalize_hypothesis_group_ref(value: str | None) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -6671,6 +6683,102 @@ def normalize_hypothesis_group_ref(value: str | None) -> str:
             return parts[1].strip()
         return ""
     return raw
+
+
+@app.get("/hypothesis/project_review_group")
+def get_project_hypothesis_review_group(project_id: UUID, request: Request):
+    uid = current_user_id(request)
+    db = SessionLocal()
+    try:
+        assert_project_member(db, project_id, uid)
+        row = db.get(ProjectHypothesisReviewGroup, project_id)
+        if not row:
+            return {"ok": True, "project_id": str(project_id), "group_id": None, "group": None}
+
+        group = db.get(HypothesisGroup, row.group_id)
+        return {
+            "ok": True,
+            "project_id": str(project_id),
+            "group_id": row.group_id,
+            "group": {
+                "group_id": row.group_id,
+                "name": (group.name if group else "") or row.group_id,
+                "is_enabled": bool(group.is_enabled) if group else False,
+                "group_role": (group.group_role if group else "") or "project_review",
+                "last_synced_at": group.last_synced_at.isoformat() if group and group.last_synced_at else "",
+            },
+        }
+    finally:
+        db.close()
+
+
+@app.post("/hypothesis/project_review_group")
+def set_project_hypothesis_review_group(payload: ProjectReviewGroupSetIn, request: Request):
+    uid = current_user_id(request)
+    gid = normalize_hypothesis_group_ref(payload.group_id)
+    if not gid:
+        raise HTTPException(status_code=400, detail="group_id is required")
+    if gid == HYPOTHESIS_PUBLIC_GROUP_ID:
+        raise HTTPException(status_code=400, detail="Choose a private project review group, not Public")
+
+    db = SessionLocal()
+    try:
+        assert_project_member(db, payload.project_id, uid)
+
+        profile = hypothesis_get_profile()
+        server_userid = hypothesis_profile_userid(profile)
+        profile_group = next((g for g in (profile.get("groups") or []) if g.get("id") == gid), None)
+        server_has_access = bool(profile_group)
+
+        group_name = (payload.group_name or "").strip()
+        if profile_group:
+            if profile_group.get("public"):
+                raise HTTPException(status_code=400, detail="Choose a private project review group, not Public")
+            group_name = profile_group.get("name") or group_name or gid
+
+        group = db.get(HypothesisGroup, gid)
+        if not group:
+            group = HypothesisGroup(
+                group_id=gid,
+                name=group_name or f"Project review workspace ({gid})",
+                organization=(profile_group or {}).get("organization"),
+                scopes=(profile_group or {}).get("scopes") or [],
+                is_enabled=server_has_access,
+                group_role="project_review",
+                owner_user_id=None,
+                is_exportable=True,
+            )
+            db.add(group)
+        else:
+            if group_name:
+                group.name = group_name
+            if profile_group:
+                group.organization = profile_group.get("organization")
+                group.scopes = profile_group.get("scopes") or []
+                group.is_enabled = True
+            group.group_role = "project_review"
+            group.is_exportable = True
+
+        row = db.get(ProjectHypothesisReviewGroup, payload.project_id)
+        if row:
+            row.group_id = gid
+            row.created_by = row.created_by or uid
+        else:
+            db.add(ProjectHypothesisReviewGroup(project_id=payload.project_id, group_id=gid, created_by=uid))
+
+        db.commit()
+        return {
+            "ok": True,
+            "project_id": str(payload.project_id),
+            "group_id": gid,
+            "server_has_access": server_has_access,
+            "server_userid": server_userid,
+            "warning": None if server_has_access else (
+                f"The server Hypothesis account ({server_userid}) is not a member of this group yet."
+            ),
+        }
+    finally:
+        db.close()
 
 
 @app.post("/hypothesis/workspace")

@@ -131,8 +131,8 @@
       lets you view annotations created by the model.
     </li>
     <li>
-      <strong>Your personal workspace group:</strong>
-      where your own annotations should be saved.
+      <strong>Project review group:</strong>
+      where reviewers add corrections, rejections, and new annotations.
     </li>
     <li>
       <strong>Gold annotations group:</strong>
@@ -143,7 +143,7 @@
 
 
 <div class="card" style="border:2px solid #dc2626; background:#fff5f5;">
-  <h2 style="color:#b91c1c;">⚠️ Important: Do not annotate in the Model Predictions group</h2>
+  <h2 style="color:#b91c1c;">Important: Do not annotate in the Model Predictions group</h2>
 
   <p style="color:#7f1d1d;">
     The Model Predictions group is for viewing model-generated annotations only.
@@ -156,7 +156,7 @@
   </p>
 
   <p style="color:#7f1d1d; font-weight:700;">
-    Before adding any annotation or reply, switch Hypothesis to your personal workspace group.
+    Before adding any annotation or reply, switch Hypothesis to the project review group.
   </p>
 </div>
 
@@ -208,7 +208,7 @@
   </p>
 
   <p class="muted">
-    For your own coding, use your personal Hypothesis workspace group.
+    For review work, use the project review group.
   </p>
 
   {% if user.role == "admin" %}
@@ -219,11 +219,11 @@
 </div>
 
 <div class="card" style="border-left:4px solid #16a34a; background:#f0fdf4;">
-  <h2>Step 4 — Create your personal Hypothesis workspace</h2>
+  <h2>Step 4 — Create or join the project review group</h2>
 
   <p class="muted">
-    Create a private Hypothesis group for your own annotations.
-    This keeps your work separate from model annotations, gold annotations, and other users’ work.
+    Create one private Hypothesis group for the project and invite the reviewers plus the server Hypothesis account.
+    This keeps the project review separate from the original model and gold annotation groups.
   </p>
 
   <a class="btnlink" href="https://hypothes.is/groups/new" target="_blank" rel="noopener">
@@ -231,20 +231,19 @@
   </a>
 
   <p class="muted" style="margin-top:12px;">
-    After creating your group, copy the group link and send it to the app admin.
-    The admin must sync or assign the group before it appears as your personal workspace in this tool.
+    After creating the group, copy the group link and set it as the project review group in this tool.
   </p>
 </div>
 
 <div class="card" style="border-left:4px solid #0ea5e9; background:#f0f9ff;">
-  <h2>Step 5 — Check your app workspace</h2>
+  <h2>Step 5 — Check the project review group</h2>
 
   <p class="muted">
-    Once your personal Hypothesis group has been synced into the app, check that it is assigned to your account.
+    Confirm that the selected project has a review group and that the server account can access it.
   </p>
 
   <a class="btnlink" href="{{ workspace_settings_url }}">
-    Check My Personal Workspace
+    Check Project Review Group
   </a>
 </div>
 
@@ -253,7 +252,7 @@
 
   <p class="muted">
     Go to Search Documents, open a document, activate Hypothesis in your browser,
-    and select your personal workspace group in the Hypothesis sidebar before adding annotations.
+    and select the project review group in the Hypothesis sidebar before adding annotations.
   </p>
 
   <a class="btnlink" href="/ui/search">
@@ -265,7 +264,7 @@
   <div class="card">
     <h2>Admin / judge only — Gold annotations</h2>
     <p class="muted">
-      Gold annotations are separate from model predictions and personal workspaces.
+      Gold annotations are separate from model predictions and project review groups.
     </p>
 
     <a class="btnlink" href="{{ gold_group_url }}" target="_blank" rel="noopener">

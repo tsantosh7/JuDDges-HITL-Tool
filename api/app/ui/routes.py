@@ -19,7 +19,10 @@ from app.auth.deps import require_paid_user, require_role, require_user
 from app.db import SessionLocal
 
 from sqlalchemy import select, text, func
-from app.models import TopicRun, DocumentTopic, UserHypothesisWorkspace, HypothesisGroup, HypothesisAnnotation
+from app.models import (
+    TopicRun, DocumentTopic, UserHypothesisWorkspace, HypothesisGroup, HypothesisAnnotation,
+    ProjectHypothesisReviewGroup,
+)
 from app.models import ProjectDocument  # ensure imported
 
 from fastapi import Request
@@ -1432,21 +1435,21 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
     GOLD_GID = (os.getenv("HYP_GROUP_GOLD") or "K48VWwNg").strip()
   # set this in env
 
-    # find user workspace group id
+    # find project review group id
     db = SessionLocal()
     workspace_group = None
     workspace_annotations = []
+    WORK_GID = None
     try:
-        uid = user.get("id") or user.get("user_id") or user.get("sub")
-        w = db.get(UserHypothesisWorkspace, str(uid)) if uid else None
-        WORK_GID = w.group_id if w else None
+        review_row = db.get(ProjectHypothesisReviewGroup, UUID(str(project_id))) if project_id else None
+        WORK_GID = review_row.group_id if review_row else None
         if WORK_GID:
             g = db.get(HypothesisGroup, WORK_GID)
             workspace_group = {
                 "group_id": WORK_GID,
                 "name": (g.name if g else "") or WORK_GID,
                 "is_enabled": bool(g.is_enabled) if g else False,
-                "group_role": (g.group_role if g else "") or "human_workspace",
+                "group_role": (g.group_role if g else "") or "project_review",
                 "last_synced_at": g.last_synced_at.isoformat() if g and g.last_synced_at else "",
             }
             ann_rows = (
@@ -1735,7 +1738,11 @@ async def ui_create_project(
 #     )
 @router.get("/settings/hypothesis", response_class=HTMLResponse)
 async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_user)):
-    workspace_res = await asgi_get(request, "/hypothesis/workspace", params={})
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    workspace_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
     current_gid = workspace_res.get("group_id")
 
     role = (user.get("role") or "").lower()
@@ -1764,7 +1771,7 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
                 "group_id": current_gid,
                 "name": (g.name if g else "") or current_gid,
                 "is_enabled": bool(g.is_enabled) if g else False,
-                "group_role": (g.group_role if g else "") or "human_workspace",
+                "group_role": (g.group_role if g else "") or "project_review",
                 "last_synced_at": g.last_synced_at.isoformat() if g and g.last_synced_at else "",
             }
             groups.insert(0, current_group)
@@ -1781,6 +1788,8 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
             "groups": groups,
             "current_gid": current_gid,
             "current_group": current_group,
+            "project_id": project_id,
+            "project_name": _get_project_name(request),
             "is_admin": is_admin,
             "message": request.query_params.get("msg"),
         },
@@ -1803,6 +1812,10 @@ async def ui_hypothesis_settings_save(
     group_ref: str = Form(""),
     user=Depends(require_paid_user),
 ):
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
     gid = _parse_hypothesis_group_id(group_ref) or _parse_hypothesis_group_id(group_id)
     if not gid:
         return RedirectResponse(
@@ -1816,36 +1829,16 @@ async def ui_hypothesis_settings_save(
             status_code=303,
         )
 
-    uid = user.get("id") or user.get("user_id") or user.get("sub")
-    if not uid:
-        raise HTTPException(401, "Not authenticated")
-
-    db = SessionLocal()
-    try:
-        group = db.get(HypothesisGroup, gid)
-        if not group:
-            group = HypothesisGroup(
-                group_id=gid,
-                name=f"Personal workspace ({gid})",
-                scopes=[],
-                is_enabled=False,
-                group_role="human_workspace",
-                owner_user_id=str(uid),
-                is_exportable=True,
-            )
-            db.add(group)
-
-        row = db.get(UserHypothesisWorkspace, str(uid))
-        if row:
-            row.group_id = gid
-        else:
-            db.add(UserHypothesisWorkspace(user_id=str(uid), group_id=gid))
-
-        db.commit()
-    finally:
-        db.close()
-
-    return RedirectResponse("/ui/settings/hypothesis?msg=saved", status_code=303)
+    res = await asgi_post_json(
+        request,
+        "/hypothesis/project_review_group",
+        {"project_id": project_id, "group_id": gid},
+    )
+    if res.get("server_has_access"):
+        msg = "saved"
+    else:
+        msg = urllib.parse.quote(res.get("warning") or "Saved, but the server account cannot access this group yet")
+    return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
 
 
 @router.get("/hypothesis/sync_workspace", response_class=HTMLResponse)
@@ -1861,17 +1854,13 @@ async def ui_hypothesis_sync_workspace_page(
     if not project_id:
         return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
 
-    db = SessionLocal()
-    try:
-        row = db.get(UserHypothesisWorkspace, str(uid))
-        if not row or not row.group_id:
-            return RedirectResponse(
-                "/ui/settings/hypothesis?msg=Set%20your%20Hypothesis%20workspace%20first",
-                status_code=303,
-            )
-        group_id = row.group_id
-    finally:
-        db.close()
+    review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+    group_id = review_res.get("group_id")
+    if not group_id:
+        return RedirectResponse(
+            "/ui/settings/hypothesis?msg=Set%20the%20project%20review%20group%20first",
+            status_code=303,
+        )
 
     core = (request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip() or "hitl_test"
     payload = {
@@ -1916,22 +1905,18 @@ async def ui_hypothesis_sync_workspace(
     if not uid:
         raise HTTPException(401, "Not authenticated")
 
-    db = SessionLocal()
-    try:
-        row = db.get(UserHypothesisWorkspace, str(uid))
-        if not row or not row.group_id:
-            return RedirectResponse(
-                "/ui/settings/hypothesis?msg=Set%20your%20Hypothesis%20workspace%20first",
-                status_code=303,
-            )
-        group_id = row.group_id
-    finally:
-        db.close()
-
     core = (request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip() or "hitl_test"
     project_id = _get_project_id(request)
     if not project_id:
         return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+    group_id = review_res.get("group_id")
+    if not group_id:
+        return RedirectResponse(
+            "/ui/settings/hypothesis?msg=Set%20the%20project%20review%20group%20first",
+            status_code=303,
+        )
 
     await asgi_post_json(
         request,
@@ -1964,7 +1949,7 @@ async def ui_hypothesis_sync_workspace(
     )
     seen = int(res.get("annotations_seen") or 0)
     linked = int(res.get("annotations_linked_to_docs") or 0)
-    msg = urllib.parse.quote(f"Synced workspace: {seen} annotations seen, {linked} linked")
+    msg = urllib.parse.quote(f"Synced project review group: {seen} annotations seen, {linked} linked")
     return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
 
 
