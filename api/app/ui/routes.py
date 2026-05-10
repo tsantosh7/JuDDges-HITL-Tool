@@ -1513,6 +1513,17 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
         topics = topics_res.get("topics", []) or []
 
     codes_view, code_stats = build_codes_view(doc)
+    workspace_tags = {
+        str(tag).strip()
+        for ann in (workspace_annotations or [])
+        for tag in (ann.get("tags") or [])
+        if str(tag).strip()
+    }
+    workspace_tag_keys = {t.lower() for t in workspace_tags}
+    model_suggestion_codes = [
+        r for r in codes_view
+        if r.get("source") == "model" and str(r.get("code") or "").strip().lower() not in workspace_tag_keys
+    ]
 
     back_url_raw = request.query_params.get("back_url") or request.headers.get("referer")
     back_url = _normalize_back_url(back_url_raw) or f"/ui/search?core={core}"
@@ -1542,6 +1553,7 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
             "workspace_group_id": WORK_GID,
             "workspace_group": workspace_group,
             "workspace_annotations": workspace_annotations,
+            "model_suggestion_codes": model_suggestion_codes,
         },
     )
 

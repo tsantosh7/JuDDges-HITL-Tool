@@ -280,6 +280,17 @@
           </div>
         {% endif %}
 
+        {% if model_suggestion_codes and model_suggestion_codes|length > 0 %}
+          <div style="margin-top:10px;">
+            <div class="muted" style="font-size:12px; font-weight:600; margin-bottom:6px;">
+              Model-only tags to consider
+            </div>
+            {% for r in model_suggestion_codes[:8] %}
+              <span class="pill">{{ r.code }}</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+
         {% if not has_model %}
           <div class="muted" style="font-size:12px; margin-top:8px;">
             No model predictions available yet.
