@@ -68,18 +68,35 @@
     Most projects use one reusable shared review group. Reviewers join it once, and the app separates project work
     using project and document tags. Create a separate private group only for restricted projects or teams.
   </p>
+  {% if review_group_url %}
+    <p class="muted">
+      Current project review group:
+      <strong>{{ (review_group.name if review_group else review_group_id) or review_group_id }}</strong>
+      <span class="mono">({{ review_group_id }})</span>
+    </p>
+    <a class="btnlink" href="{{ review_group_url }}" target="_blank" rel="noopener">
+      Join / Open Review Group
+    </a>
+  {% else %}
+    <div class="alert" style="margin-top:12px;">
+      This project does not have a selected review group yet. Ask an admin to set the shared review group first.
+    </div>
+  {% endif %}
   <p class="muted">
-    Send reviewers the group link. After they join, add their Hypothesis username to the approved reviewer list
+    After reviewers join, add their Hypothesis username to the approved reviewer list
     in the review group settings so their annotations are imported during sync.
   </p>
-
-  <a class="btnlink" href="https://hypothes.is/groups/new" target="_blank" rel="noopener">
-    Create Separate Private Group
-  </a>
-
-  <p class="muted" style="margin-top:12px;">
-    If a separate group is needed, copy the group link and set it as the project review group in this tool.
+  <p class="muted">
+    Reviewers can find their Hypothesis username in their Hypothesis account/profile. They only need to provide
+    the username, for example <span class="mono">alice</span>; the app stores it as
+    <span class="mono">acct:alice@hypothes.is</span>.
   </p>
+
+  {% if user and user.role == "admin" %}
+    <a class="btnlink" href="https://hypothes.is/groups/new" target="_blank" rel="noopener">
+      Create Separate Private Group
+    </a>
+  {% endif %}
 </div>
 
 <div class="card" style="border-left:4px solid #0ea5e9; background:#f0f9ff;">

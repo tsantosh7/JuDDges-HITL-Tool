@@ -33,6 +33,11 @@
       {% if current_group and not current_group.is_enabled %}
         <span class="muted">The server account has not confirmed access yet.</span>
       {% endif %}
+      <div style="margin-top:10px;">
+        <a class="btnlink" href="https://hypothes.is/groups/{{ current_gid }}" target="_blank" rel="noopener">
+          Join / Open Review Group
+        </a>
+      </div>
     </div>
   {% endif %}
 
@@ -70,7 +75,7 @@
     </form>
   {% else %}
     <div class="alert" style="margin-top:12px;">
-      Only project owners or admins can change the selected review group.
+      Only admins can change the selected review group.
     </div>
   {% endif %}
 
@@ -86,6 +91,11 @@
   <p class="muted">
     Share the Hypothesis invite link with reviewers. After they join, add their Hypothesis username here.
     Human annotations from unapproved or blocked Hypothesis accounts are ignored during sync.
+  </p>
+  <p class="muted">
+    Reviewers can find their Hypothesis username in their Hypothesis account/profile. They only need to give you
+    the username, for example <span class="mono">alice</span>; the app stores it as
+    <span class="mono">acct:alice@hypothes.is</span>.
   </p>
 
   {% if is_review_manager %}
@@ -127,7 +137,7 @@
                   <button type="submit" class="btnlink">{{ 'Allow' if r.status == 'blocked' else 'Block' }}</button>
                 </form>
               {% else %}
-                <span class="muted">Managed by project owner/admin</span>
+                <span class="muted">Managed by admin</span>
               {% endif %}
             </td>
           </tr>

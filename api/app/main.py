@@ -6640,6 +6640,12 @@ def assert_project_manager(db, project_id: UUID, user_id: str, request: Request)
         raise HTTPException(status_code=403, detail="Only project owners/admins can manage Hypothesis review access")
 
 
+def assert_admin_user(request: Request):
+    user = get_current_user(request)
+    if (user.get("role") or "").lower() != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can manage Hypothesis review access")
+
+
 def assert_topic_run_owner(db, run_id: UUID, user_id: str, actor: str | None = None):
     run = db.get(TopicRun, run_id)
     if not run:
@@ -6798,7 +6804,8 @@ def set_project_hypothesis_review_group(payload: ProjectReviewGroupSetIn, reques
 
     db = SessionLocal()
     try:
-        assert_project_manager(db, payload.project_id, uid, request)
+        assert_admin_user(request)
+        assert_project_member(db, payload.project_id, uid)
 
         profile = hypothesis_get_profile()
         server_userid = hypothesis_profile_userid(profile)
@@ -6902,7 +6909,8 @@ def upsert_project_hypothesis_reviewer(payload: ProjectHypothesisReviewerIn, req
 
     db = SessionLocal()
     try:
-        assert_project_manager(db, payload.project_id, uid, request)
+        assert_admin_user(request)
+        assert_project_member(db, payload.project_id, uid)
         row = db.get(ProjectHypothesisReviewer, {"project_id": payload.project_id, "hypothesis_user": hyp_user})
         if row:
             row.status = status

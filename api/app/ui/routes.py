@@ -1697,22 +1697,6 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
     role = (user.get("role") or "").lower()
     is_admin = role == "admin"
     is_review_manager = is_admin
-    if not is_review_manager:
-        uid = user.get("id") or user.get("user_id") or user.get("sub")
-        db = SessionLocal()
-        try:
-            row = db.execute(
-                text("""
-                    SELECT role
-                    FROM project_members
-                    WHERE project_id = :pid AND user_id = :uid
-                    LIMIT 1
-                """),
-                {"pid": str(project_id), "uid": str(uid)},
-            ).first()
-            is_review_manager = bool(row and str(row[0] or "").lower() in {"owner", "admin"})
-        finally:
-            db.close()
 
     groups = []
 
@@ -1947,29 +1931,30 @@ async def ui_hypothesis_sync_workspace(
 
 @router.get("/hypothesis/access", response_class=HTMLResponse)
 async def ui_hypothesis_access(request: Request, user=Depends(require_user)):
-    import os
-
-    model_gid = (os.getenv("HYP_GROUP_MODEL") or "BXp1QL5v").strip()
-    gold_gid = (os.getenv("HYP_GROUP_GOLD") or "K48VWwNg").strip()
-
-    # direct group pages (work even without a document URL)
-    model_group_url = f"https://hypothes.is/groups/{model_gid}/model-predictions"
-    gold_group_url = f"https://hypothes.is/groups/{gold_gid}/gold-annotations"
-    model_invite_url = f"https://hypothes.is/groups/{model_gid}/model-predictions"
-
-    # workspace selection page you added earlier
+    project_id = _get_project_id(request)
+    project_name = _get_project_name(request)
     workspace_settings_url = "/ui/settings/hypothesis"
+    review_group = None
+    review_group_id = None
+    review_group_url = None
+
+    if project_id:
+        review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+        review_group_id = review_res.get("group_id")
+        review_group = review_res.get("group")
+        if review_group_id:
+            review_group_url = f"https://hypothes.is/groups/{review_group_id}"
 
     return request.app.state.templates.TemplateResponse(
         "hypothesis_access.html",
         {
             "request": request,
             "user": user,
-            "model_gid": model_gid,
-            "gold_gid": gold_gid,
-            "model_group_url": model_group_url,
-            "gold_group_url": gold_group_url,
-            "model_invite_url": model_invite_url,
+            "project_id": project_id,
+            "project_name": project_name,
+            "review_group": review_group,
+            "review_group_id": review_group_id,
+            "review_group_url": review_group_url,
             "workspace_settings_url": workspace_settings_url,
         },
     )
