@@ -36,41 +36,108 @@
     </div>
   {% endif %}
 
-  <form method="post" action="/ui/settings/hypothesis" style="margin-top:12px;">
-    <div class="grow">
-      <label class="muted">Paste the shared or project-specific Hypothesis group link or ID</label>
-      <input class="grow"
-             name="group_ref"
-             placeholder="https://hypothes.is/groups/abc123/project-review"
-             value="">
-      <div class="muted" style="font-size:12px; margin-top:6px;">
-        The configured server Hypothesis account must be a member of this group so it can copy model suggestions
-        and gold references into the review workspace.
+  {% if is_review_manager %}
+    <form method="post" action="/ui/settings/hypothesis" style="margin-top:12px;">
+      <div class="grow">
+        <label class="muted">Paste the shared or project-specific Hypothesis group link or ID</label>
+        <input class="grow"
+               name="group_ref"
+               placeholder="https://hypothes.is/groups/abc123/project-review"
+               value="">
+        <div class="muted" style="font-size:12px; margin-top:6px;">
+          The configured server Hypothesis account must be a member of this group so it can copy model suggestions
+          and gold references into the review workspace.
+        </div>
       </div>
+
+      {% if groups and groups|length > 0 %}
+        <div class="grow" style="margin-top:12px;">
+          <label class="muted">Or choose a server-accessible group</label>
+          <select name="group_id" class="grow">
+            <option value="" {% if not current_gid %}selected{% endif %}>Select a group...</option>
+          {% for g in groups %}
+            {% set gid = g.group_id %}
+            {% set name = g.name or gid %}
+            <option value="{{ gid }}" {% if current_gid == gid %}selected{% endif %}>
+              {{ name }} ({{ gid }})
+            </option>
+          {% endfor %}
+          </select>
+        </div>
+      {% endif %}
+
+      <button type="submit" class="btnlink" style="margin-top:12px;">Save Review Group</button>
+    </form>
+  {% else %}
+    <div class="alert" style="margin-top:12px;">
+      Only project owners or admins can change the selected review group.
     </div>
-
-    {% if groups and groups|length > 0 %}
-      <div class="grow" style="margin-top:12px;">
-        <label class="muted">Or choose a server-accessible group</label>
-        <select name="group_id" class="grow">
-          <option value="" {% if not current_gid %}selected{% endif %}>Select a group...</option>
-        {% for g in groups %}
-          {% set gid = g.group_id %}
-          {% set name = g.name or gid %}
-          <option value="{{ gid }}" {% if current_gid == gid %}selected{% endif %}>
-            {{ name }} ({{ gid }})
-          </option>
-        {% endfor %}
-        </select>
-      </div>
-    {% endif %}
-
-    <button type="submit" class="btnlink" style="margin-top:12px;">Save Review Group</button>
-  </form>
+  {% endif %}
 
   {% if current_gid %}
     <div style="margin-top:12px;">
       <a class="btnlink" href="/ui/hypothesis/sync_workspace">Sync Project Review Group</a>
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Approved reviewers</h3>
+  <p class="muted">
+    Share the Hypothesis invite link with reviewers. After they join, add their Hypothesis username here.
+    Human annotations from unapproved or blocked Hypothesis accounts are ignored during sync.
+  </p>
+
+  {% if is_review_manager %}
+    <form method="post" action="/ui/settings/hypothesis/reviewers" class="row" style="margin-top:12px;">
+      <div class="grow">
+        <label class="muted">Hypothesis username</label>
+        <input name="hypothesis_user" placeholder="username or acct:username@hypothes.is">
+      </div>
+      <div class="small">
+        <label class="muted">Status</label>
+        <select name="status">
+          <option value="active">active</option>
+          <option value="blocked">blocked</option>
+        </select>
+      </div>
+      <button type="submit" class="btnlink">Save Reviewer</button>
+    </form>
+  {% endif %}
+
+  {% if approved_reviewers and approved_reviewers|length > 0 %}
+    <table class="table" style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Hypothesis account</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in approved_reviewers %}
+          <tr>
+            <td class="mono">{{ r.hypothesis_user }}</td>
+            <td>{{ r.status }}</td>
+            <td>
+              {% if is_review_manager %}
+                <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                  <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
+                  <input type="hidden" name="status" value="{{ 'active' if r.status == 'blocked' else 'blocked' }}">
+                  <button type="submit" class="btnlink">{{ 'Allow' if r.status == 'blocked' else 'Block' }}</button>
+                </form>
+              {% else %}
+                <span class="muted">Managed by project owner/admin</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="alert" style="margin-top:12px;">
+      No approved reviewers yet. Copied suggestions will sync, but human review annotations from this shared group
+      will not be imported until at least one reviewer is approved.
     </div>
   {% endif %}
 </div>

@@ -58,6 +58,7 @@ from .init_db import init
 from .models import (
     Team, Project, Document, ProjectDocument,
     HypothesisGroup, HypothesisAnnotation, UserHypothesisWorkspace, ProjectHypothesisReviewGroup,
+    ProjectHypothesisReviewer,
     Code, CodeAlias, ProjectDocumentReview, TopicRun, DocumentTopic, DocEmbedding,
 )
 
@@ -2741,6 +2742,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
             "groups_synced": 0,
             "groups_skipped_locked": 0,
             "annotations_seen": 0,
+            "annotations_skipped_unapproved_reviewers": 0,
             "annotations_linked_to_docs": 0,
             "docs_flagged_in_solr": 0,
         }
@@ -2890,6 +2892,13 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                 for raw in ann_list:
                     fields, _has_span, updated_str = hypothesis_extract(raw)
                     fields["source_type"] = source_type_for_annotation(fields, group_role)
+                    if (
+                        group_role == "project_review"
+                        and fields["source_type"] == "human"
+                        and not project_review_user_allowed(db, payload.project_id, fields.get("user"))
+                    ):
+                        totals["annotations_skipped_unapproved_reviewers"] += 1
+                        continue
                     extracted.append(fields)
                     if fields.get("canonical_url"):
                         urls.append(fields["canonical_url"])
@@ -6612,6 +6621,25 @@ def assert_project_member(db, project_id: UUID, user_id: str):
     if not row:
         raise HTTPException(status_code=403, detail="Not a member of this project")
 
+
+def assert_project_manager(db, project_id: UUID, user_id: str, request: Request):
+    user = get_current_user(request)
+    if (user.get("role") or "").lower() == "admin":
+        return
+
+    row = db.execute(
+        text("""
+            SELECT role
+            FROM project_members
+            WHERE project_id = :pid AND user_id = :uid
+            LIMIT 1
+        """),
+        {"pid": str(project_id), "uid": str(user_id)},
+    ).first()
+    if not row or str(row[0] or "").lower() not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Only project owners/admins can manage Hypothesis review access")
+
+
 def assert_topic_run_owner(db, run_id: UUID, user_id: str, actor: str | None = None):
     run = db.get(TopicRun, run_id)
     if not run:
@@ -6659,6 +6687,12 @@ class ProjectReviewGroupSetIn(BaseModel):
     group_name: Optional[str] = None
 
 
+class ProjectHypothesisReviewerIn(BaseModel):
+    project_id: UUID
+    hypothesis_user: str
+    status: str = "active"
+
+
 def normalize_hypothesis_group_ref(value: str | None) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -6678,6 +6712,52 @@ def normalize_hypothesis_group_ref(value: str | None) -> str:
             return parts[1].strip()
         return ""
     return raw
+
+
+def normalize_hypothesis_user(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    raw = raw.rstrip("/")
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme and parsed.netloc:
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if parts:
+            raw = parts[-1]
+    if raw.startswith("acct:"):
+        return raw.lower()
+    raw = raw.strip().lstrip("@")
+    if "@" in raw:
+        user_part, authority = raw.split("@", 1)
+        if user_part.startswith("acct:"):
+            user_part = user_part[5:]
+        return f"acct:{user_part.lower()}@{authority.lower()}"
+    return f"acct:{raw.lower()}@hypothes.is"
+
+
+def project_review_user_allowed(db, project_id: UUID | None, hypothesis_user: str | None) -> bool:
+    if not project_id:
+        return False
+    normalized = normalize_hypothesis_user(hypothesis_user)
+    if not normalized:
+        return False
+
+    row = db.get(ProjectHypothesisReviewer, {"project_id": project_id, "hypothesis_user": normalized})
+    if row and row.status == "blocked":
+        return False
+    if row and row.status == "active":
+        return True
+
+    active_count = db.execute(
+        select(func.count())
+        .select_from(ProjectHypothesisReviewer)
+        .where(ProjectHypothesisReviewer.project_id == project_id)
+        .where(ProjectHypothesisReviewer.status == "active")
+    ).scalar() or 0
+
+    # Secure default: once a shared review group is used, only explicitly approved
+    # Hypothesis accounts are imported as human review annotations.
+    return False if active_count == 0 else False
 
 
 @app.get("/hypothesis/project_review_group")
@@ -6718,7 +6798,7 @@ def set_project_hypothesis_review_group(payload: ProjectReviewGroupSetIn, reques
 
     db = SessionLocal()
     try:
-        assert_project_member(db, payload.project_id, uid)
+        assert_project_manager(db, payload.project_id, uid, request)
 
         profile = hypothesis_get_profile()
         server_userid = hypothesis_profile_userid(profile)
@@ -6771,6 +6851,77 @@ def set_project_hypothesis_review_group(payload: ProjectReviewGroupSetIn, reques
             "warning": None if server_has_access else (
                 f"The server Hypothesis account ({server_userid}) is not a member of this group yet."
             ),
+        }
+    finally:
+        db.close()
+
+
+@app.get("/hypothesis/project_reviewers")
+def list_project_hypothesis_reviewers(project_id: UUID, request: Request):
+    uid = current_user_id(request)
+    db = SessionLocal()
+    try:
+        assert_project_member(db, project_id, uid)
+        rows = (
+            db.execute(
+                select(ProjectHypothesisReviewer)
+                .where(ProjectHypothesisReviewer.project_id == project_id)
+                .order_by(ProjectHypothesisReviewer.status.asc(), ProjectHypothesisReviewer.hypothesis_user.asc())
+            )
+            .scalars()
+            .all()
+        )
+        return {
+            "ok": True,
+            "project_id": str(project_id),
+            "reviewers": [
+                {
+                    "hypothesis_user": r.hypothesis_user,
+                    "status": r.status,
+                    "added_by": r.added_by,
+                    "created_at": r.created_at.isoformat() if r.created_at else "",
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        db.close()
+
+
+@app.post("/hypothesis/project_reviewers")
+def upsert_project_hypothesis_reviewer(payload: ProjectHypothesisReviewerIn, request: Request):
+    user = get_current_user(request)
+    uid = current_user_id(request)
+    status = (payload.status or "active").strip().lower()
+    if status not in {"active", "blocked"}:
+        raise HTTPException(400, "status must be active|blocked")
+    hyp_user = normalize_hypothesis_user(payload.hypothesis_user)
+    if not hyp_user:
+        raise HTTPException(400, "hypothesis_user is required")
+
+    db = SessionLocal()
+    try:
+        assert_project_manager(db, payload.project_id, uid, request)
+        row = db.get(ProjectHypothesisReviewer, {"project_id": payload.project_id, "hypothesis_user": hyp_user})
+        if row:
+            row.status = status
+            row.added_by = row.added_by or uid
+        else:
+            row = ProjectHypothesisReviewer(
+                project_id=payload.project_id,
+                hypothesis_user=hyp_user,
+                status=status,
+                added_by=uid,
+            )
+            db.add(row)
+        db.commit()
+        return {
+            "ok": True,
+            "project_id": str(payload.project_id),
+            "hypothesis_user": hyp_user,
+            "status": status,
+            "added_by": user.get("username") or user.get("email") or uid,
         }
     finally:
         db.close()

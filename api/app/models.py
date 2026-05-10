@@ -85,6 +85,20 @@ class ProjectHypothesisReviewGroup(Base):
     group = relationship("HypothesisGroup")
 
 
+class ProjectHypothesisReviewer(Base):
+    __tablename__ = "project_hypothesis_reviewers"
+
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), primary_key=True)
+    hypothesis_user = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="active")
+    added_by = Column(String, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project")
+
+
 class HypothesisGroup(Base):
     __tablename__ = "hypothesis_groups"
 

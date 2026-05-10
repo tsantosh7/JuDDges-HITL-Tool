@@ -56,6 +56,21 @@ def _apply_lightweight_migrations():
         CREATE INDEX IF NOT EXISTS idx_project_hypothesis_review_groups_group
           ON project_hypothesis_review_groups(group_id)
         """,
+        """
+        CREATE TABLE IF NOT EXISTS project_hypothesis_reviewers (
+          project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+          hypothesis_user TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          added_by TEXT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (project_id, hypothesis_user)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_project_hypothesis_reviewers_status
+          ON project_hypothesis_reviewers(project_id, status)
+        """,
     ]
     with engine.begin() as conn:
         for stmt in statements:

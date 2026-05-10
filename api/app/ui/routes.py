@@ -1691,9 +1691,28 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
 
     workspace_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
     current_gid = workspace_res.get("group_id")
+    reviewers_res = await asgi_get(request, "/hypothesis/project_reviewers", params={"project_id": project_id})
+    approved_reviewers = reviewers_res.get("reviewers", []) or []
 
     role = (user.get("role") or "").lower()
     is_admin = role == "admin"
+    is_review_manager = is_admin
+    if not is_review_manager:
+        uid = user.get("id") or user.get("user_id") or user.get("sub")
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                text("""
+                    SELECT role
+                    FROM project_members
+                    WHERE project_id = :pid AND user_id = :uid
+                    LIMIT 1
+                """),
+                {"pid": str(project_id), "uid": str(uid)},
+            ).first()
+            is_review_manager = bool(row and str(row[0] or "").lower() in {"owner", "admin"})
+        finally:
+            db.close()
 
     groups = []
 
@@ -1737,7 +1756,9 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
             "current_group": current_group,
             "project_id": project_id,
             "project_name": _get_project_name(request),
+            "approved_reviewers": approved_reviewers,
             "is_admin": is_admin,
+            "is_review_manager": is_review_manager,
             "message": request.query_params.get("msg"),
         },
     )
@@ -1785,6 +1806,30 @@ async def ui_hypothesis_settings_save(
         msg = "saved"
     else:
         msg = urllib.parse.quote(res.get("warning") or "Saved, but the server account cannot access this group yet")
+    return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
+
+
+@router.post("/settings/hypothesis/reviewers")
+async def ui_hypothesis_reviewers_save(
+    request: Request,
+    hypothesis_user: str = Form(""),
+    status: str = Form("active"),
+    user=Depends(require_paid_user),
+):
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    await asgi_post_json(
+        request,
+        "/hypothesis/project_reviewers",
+        {
+            "project_id": project_id,
+            "hypothesis_user": hypothesis_user,
+            "status": status,
+        },
+    )
+    msg = urllib.parse.quote("Reviewer list updated")
     return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
 
 

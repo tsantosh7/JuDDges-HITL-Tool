@@ -150,6 +150,9 @@ async function runSync() {
           statusEl.textContent = "Sync complete.";
           seenEl.textContent = data.annotations_seen || 0;
           linkedEl.textContent = data.annotations_linked_to_docs || 0;
+          if (data.annotations_skipped_unapproved_reviewers) {
+            logLine("Skipped unapproved reviewer annotations: " + data.annotations_skipped_unapproved_reviewers);
+          }
           logLine("Sync complete.");
         }
       }
