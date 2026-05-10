@@ -2482,8 +2482,25 @@ def hypothesis_search_rows(group_id: str, tags: list[str], limit: int = 200) -> 
 def hypothesis_create_annotation(payload: dict) -> dict:
     r = _hyp_post(f"{HYPOTHESIS_API_BASE}/annotations", payload)
     if r.status_code >= 300:
+        body = r.text[:800]
+        if r.status_code in {400, 403} and "may not create annotations in the specified group" in body:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "The server Hypothesis account is not allowed to create annotations in this workspace group. "
+                    "Invite the server Hypothesis account to the private group, then run Sync My Workspace again."
+                ),
+            )
         raise HTTPException(status_code=500, detail=f"Hypothesis create failed: {r.status_code} {r.text[:800]}")
     return r.json()
+
+
+def hypothesis_profile_userid(profile: dict) -> str:
+    return str(profile.get("userid") or profile.get("username") or "the configured server account")
+
+
+def hypothesis_profile_has_group(profile: dict, group_id: str) -> bool:
+    return any((g or {}).get("id") == group_id for g in (profile.get("groups") or []))
 
 
 def prepare_model_suggestion_payload(
@@ -2965,6 +2982,19 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
         group = db.get(HypothesisGroup, payload.group_id)
         if not group:
             raise HTTPException(404, "Workspace group not found")
+
+        profile = hypothesis_get_profile()
+        server_userid = hypothesis_profile_userid(profile)
+        if not hypothesis_profile_has_group(profile, payload.group_id):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"The server Hypothesis account ({server_userid}) cannot access workspace group "
+                    f"{payload.group_id}. Hypothesis only allows the server to copy model/gold review items "
+                    "into private groups where that account is a member. Invite that account to the group, "
+                    "then run Sync My Workspace again."
+                ),
+            )
 
         doc_rows = (
             db.execute(

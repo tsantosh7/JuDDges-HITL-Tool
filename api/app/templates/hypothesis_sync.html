@@ -49,6 +49,12 @@ function logLine(text) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+function errorText(data, fallback) {
+  if (!data || data.detail === undefined || data.detail === null) return fallback;
+  if (typeof data.detail === "string") return data.detail;
+  return JSON.stringify(data.detail);
+}
+
 function updateProgress(data) {
   const groupsTotal = Number(data.groups_total || 0);
   const groupsDone = Number(data.groups_done || 0);
@@ -93,7 +99,7 @@ async function runSync() {
     });
     const prepareData = await prepareResponse.json().catch(() => ({}));
     if (!prepareResponse.ok) {
-      throw new Error(prepareData.detail || "Workspace preparation failed: " + prepareResponse.status);
+      throw new Error(errorText(prepareData, "Workspace preparation failed: " + prepareResponse.status));
     }
     logLine(
       "Prepared workspace: " +
