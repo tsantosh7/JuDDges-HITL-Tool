@@ -2988,7 +2988,7 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
 
     db = SessionLocal()
     try:
-        assert_project_member(db, payload.project_id, uid)
+        assert_project_member_or_admin(db, payload.project_id, uid, request)
 
         review_group = db.get(ProjectHypothesisReviewGroup, payload.project_id)
         if not review_group or review_group.group_id != payload.group_id:
@@ -6622,6 +6622,13 @@ def assert_project_member(db, project_id: UUID, user_id: str):
         raise HTTPException(status_code=403, detail="Not a member of this project")
 
 
+def assert_project_member_or_admin(db, project_id: UUID, user_id: str, request: Request):
+    user = get_current_user(request)
+    if (user.get("role") or "").lower() == "admin":
+        return
+    assert_project_member(db, project_id, user_id)
+
+
 def assert_project_manager(db, project_id: UUID, user_id: str, request: Request):
     user = get_current_user(request)
     if (user.get("role") or "").lower() == "admin":
@@ -6771,7 +6778,7 @@ def get_project_hypothesis_review_group(project_id: UUID, request: Request):
     uid = current_user_id(request)
     db = SessionLocal()
     try:
-        assert_project_member(db, project_id, uid)
+        assert_project_member_or_admin(db, project_id, uid, request)
         row = db.get(ProjectHypothesisReviewGroup, project_id)
         if not row:
             return {"ok": True, "project_id": str(project_id), "group_id": None, "group": None}
@@ -6805,7 +6812,7 @@ def set_project_hypothesis_review_group(payload: ProjectReviewGroupSetIn, reques
     db = SessionLocal()
     try:
         assert_admin_user(request)
-        assert_project_member(db, payload.project_id, uid)
+        assert_project_member_or_admin(db, payload.project_id, uid, request)
 
         profile = hypothesis_get_profile()
         server_userid = hypothesis_profile_userid(profile)
@@ -6868,7 +6875,7 @@ def list_project_hypothesis_reviewers(project_id: UUID, request: Request):
     uid = current_user_id(request)
     db = SessionLocal()
     try:
-        assert_project_member(db, project_id, uid)
+        assert_project_member_or_admin(db, project_id, uid, request)
         rows = (
             db.execute(
                 select(ProjectHypothesisReviewer)
@@ -6910,7 +6917,7 @@ def upsert_project_hypothesis_reviewer(payload: ProjectHypothesisReviewerIn, req
     db = SessionLocal()
     try:
         assert_admin_user(request)
-        assert_project_member(db, payload.project_id, uid)
+        assert_project_member_or_admin(db, payload.project_id, uid, request)
         row = db.get(ProjectHypothesisReviewer, {"project_id": payload.project_id, "hypothesis_user": hyp_user})
         if row:
             row.status = status
