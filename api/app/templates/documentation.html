@@ -201,6 +201,29 @@
 </div>
 
 <div class="card">
+  <h2>Reviewer Workflow: What To Do Each Time</h2>
+  <p class="muted">
+    This is the normal order for reviewers working on an existing HiTL project.
+  </p>
+  <ol>
+    <li><b>Select the project</b> in <b>My Projects</b>. The project name should appear in the top bar.</li>
+    <li><b>Open Hypothesis Tool</b> and join the project review group if you have not joined it already.</li>
+    <li><b>Request review access</b> with your Hypothesis username. Wait until an admin approves you.</li>
+    <li><b>Open a document</b> from <b>Search Documents</b> or <b>My Projects</b>.</li>
+    <li><b>Turn on Hypothesis</b> in Chrome and choose the project review group in the Hypothesis sidebar.</li>
+    <li><b>Read the model suggestions</b> in the sidebar and compare each suggestion with the judgment text.</li>
+    <li><b>Leave correct suggestions unchanged</b>. You do not need to write "accept".</li>
+    <li><b>Only act when something is wrong, incomplete, or missing</b>.</li>
+    <li><b>Sync the project review group</b> after review work has been added, so the app imports your changes.</li>
+    <li><b>Refresh the document page</b> and check that corrected or new values appear in the code table.</li>
+  </ol>
+  <div class="alert">
+    Most review time should be spent checking evidence, not creating extra comments. Correct suggestions are
+    accepted by doing nothing.
+  </div>
+</div>
+
+<div class="card">
   <h2>Sync the Project Review Group</h2>
   <p class="muted">
     Syncing does two things. First, it prepares the workspace by copying model suggestions and available reference
@@ -221,7 +244,7 @@
 </div>
 
 <div class="card">
-  <h2>How to Review Model Suggestions</h2>
+  <h2>How to Record Review Decisions</h2>
   <table class="table">
     <thead>
       <tr>
@@ -233,31 +256,71 @@
     <tbody>
       <tr>
         <td>The model suggestion is correct</td>
-        <td>Do nothing. Leave the suggestion unchanged.</td>
+        <td>Do nothing. Do not add an accept comment.</td>
         <td>It is treated as an implicit accept.</td>
       </tr>
       <tr>
         <td>The model suggestion is wrong</td>
-        <td>Reply to the suggestion or annotate the evidence and add the tag <span class="mono">review:reject</span>.</td>
+        <td>Reply to the model suggestion with <span class="mono">reject</span>, or add the tag <span class="mono">review:reject</span>.</td>
         <td>The rejected model value is excluded.</td>
       </tr>
       <tr>
         <td>The value is close but needs correction</td>
-        <td>Reply with the corrected value. If making a new annotation, add the correct field tag.</td>
+        <td>Reply to the model suggestion with the corrected value.</td>
         <td>The human correction takes priority over the model value.</td>
       </tr>
       <tr>
         <td>The model missed something</td>
-        <td>Create a new annotation on the right text span, enter the value, and add the correct field tag.</td>
+        <td>Highlight the correct text, create a new annotation, enter the value if needed, and add the correct field tag.</td>
         <td>The new human annotation is included if the reviewer is approved.</td>
       </tr>
     </tbody>
   </table>
   <p class="muted">
-    For corrections and new annotations, field tags matter. A field tag tells the app which code the annotation
-    belongs to, for example <span class="mono">field:ConvCourtName</span>. Where possible, reply to an existing
-    model suggestion because the app can then infer the field from the suggestion thread.
+    For corrections, the easiest and safest method is to reply to the existing model suggestion. The app can then
+    inherit the correct field from the model suggestion. For brand-new annotations, field tags matter. A field tag
+    tells the app which code the annotation belongs to, for example <span class="mono">field:ConvCourtName</span>
+    or <span class="mono">ConvCourtName</span>.
   </p>
+</div>
+
+<div class="card">
+  <h2>Examples</h2>
+
+  <h3>If the suggestion is correct</h3>
+  <p class="muted">
+    Model suggestion: <span class="mono">ConvCourtName = Court of Appeal</span>
+  </p>
+  <p class="muted">
+    Reviewer action: do nothing.
+  </p>
+
+  <h3>If the suggestion is wrong</h3>
+  <p class="muted">
+    Open the model suggestion in Hypothesis and reply:
+  </p>
+  <div class="alert mono">reject</div>
+  <p class="muted">
+    The app treats this as a rejection during sync.
+  </p>
+
+  <h3>If the suggestion needs correction</h3>
+  <p class="muted">
+    Open the model suggestion in Hypothesis and reply with the correct value:
+  </p>
+  <div class="alert mono">Northampton Crown Court</div>
+  <p class="muted">
+    The app imports this as the reviewed human value for the same field.
+  </p>
+
+  <h3>If the model missed a value</h3>
+  <ol>
+    <li>Highlight the evidence in the judgment.</li>
+    <li>Click <b>Annotate</b> in Hypothesis.</li>
+    <li>Write the value if the highlighted text alone is not enough.</li>
+    <li>Add the correct field tag, for example <span class="mono">field:SentCourtName</span>.</li>
+    <li>Save the annotation in the project review group.</li>
+  </ol>
 </div>
 
 <div class="card">
@@ -266,8 +329,8 @@
     <li>Always check that Hypothesis is using the project review group, not Public.</li>
     <li>Read the underlying judgment text before accepting, rejecting, or correcting a suggestion.</li>
     <li>Leave correct suggestions unchanged; do not create unnecessary accept comments.</li>
-    <li>Use <span class="mono">review:reject</span> as a tag when rejecting a suggestion.</li>
-    <li>Use the correct field tag when creating a new annotation.</li>
+    <li>Prefer replying to the model suggestion when rejecting or correcting; this reduces tag mistakes.</li>
+    <li>Use the correct field tag when creating a brand-new annotation.</li>
     <li>Keep discussion in the same annotation thread where possible.</li>
     <li>Run sync again before exporting if new review work has been added in Hypothesis.</li>
   </ul>
