@@ -166,6 +166,19 @@ def source_type_for_group_role(group_role: str | None) -> str:
     return "unknown"
 
 
+def source_type_for_annotation(fields: dict, group_role: str | None) -> str:
+    tags = {str(t).strip().lower() for t in (fields.get("tags") or []) if str(t).strip()}
+    if "source:model_suggestion" in tags:
+        return "model_suggestion"
+    if "source:gold_reference" in tags:
+        return "gold_reference"
+    if "source:model" in tags:
+        return "model"
+    if "source:gold" in tags:
+        return "gold"
+    return source_type_for_group_role(group_role)
+
+
 def is_human_export_source(source_type: str | None) -> bool:
     return (source_type or "").strip() in {"human", "gold"}
 
@@ -458,6 +471,18 @@ def _hyp_get(url: str, *, params: dict | None = None):
         )
     except RequestException as e:
         # This includes ConnectionResetError wrapped as ConnectionError, timeouts, etc.
+        raise HTTPException(status_code=502, detail=f"Hypothesis request failed: {type(e).__name__}: {e}")
+
+
+def _hyp_post(url: str, payload: dict):
+    try:
+        return _HYP_SESSION.post(
+            url,
+            json=payload,
+            headers=_hyp_headers(),
+            timeout=(10, 60),
+        )
+    except RequestException as e:
         raise HTTPException(status_code=502, detail=f"Hypothesis request failed: {type(e).__name__}: {e}")
 
 # ------------------------------------------------------------------------------
@@ -1575,6 +1600,15 @@ class HypothesisSyncRequest(BaseModel):
     include_public: bool = False
 
 
+class WorkspacePrepareRequest(BaseModel):
+    core: str = SOLR_GLOBAL_CORE
+    project_id: UUID
+    group_id: str
+    include_model: bool = True
+    include_gold: bool = True
+    max_per_doc: int = 80
+
+
 # Optional: if your frontend expects these (Fix 2)
 # class CreateProjectIn(BaseModel):
 #     team_id: Optional[str] = None
@@ -2232,6 +2266,7 @@ def upsert_annotations_bulk(
     for fields in fields_list:
         seen += 1
         ann_id = fields["annotation_id"]
+        effective_source_type = fields.get("source_type") or source_type
 
         canon = normalize_url(fields.get("canonical_url")) if fields.get("canonical_url") else None
         doc_id = url_to_doc.get(canon) if canon else None
@@ -2261,7 +2296,7 @@ def upsert_annotations_bulk(
                 row.suffix = fields.get("suffix")
                 row.raw = fields.get("raw") or {}
 
-            row.source_type = source_type
+            row.source_type = effective_source_type
             row.workspace_user_id = workspace_user_id
             row.annotation_status = annotation_status
             row.codebook_version = codebook_version
@@ -2281,7 +2316,7 @@ def upsert_annotations_bulk(
                 prefix=fields.get("prefix"),
                 suffix=fields.get("suffix"),
                 raw=fields.get("raw") or {},
-                source_type=source_type,
+                source_type=effective_source_type,
                 workspace_user_id=workspace_user_id,
                 annotation_status=annotation_status,
                 codebook_version=codebook_version,
@@ -2292,7 +2327,9 @@ def upsert_annotations_bulk(
         if doc_id:
             linked += 1
 
-            if not is_human_export_source(source_type):
+            if not is_human_export_source(effective_source_type):
+                continue
+            if has_reject_review_marker(fields.get("tags") or []):
                 continue
 
             # Flags
@@ -2410,6 +2447,195 @@ def project_sync_urls(db, project_id: UUID) -> list[str]:
             seen.add(norm)
             out.append(norm)
     return out
+
+
+def stable_workspace_suggestion_id(kind: str, project_id: UUID, doc_id: str, code: str, value: str) -> str:
+    raw = json.dumps(
+        {
+            "kind": kind,
+            "project_id": str(project_id),
+            "document_id": doc_id,
+            "code": code,
+            "value": value,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def hypothesis_search_rows(group_id: str, tags: list[str], limit: int = 200) -> list[dict]:
+    params: dict[str, Any] = {
+        "group": group_id,
+        "limit": int(limit),
+        "sort": "updated",
+        "order": "desc",
+    }
+    for i, tag in enumerate(tags):
+        params["tag" if i == 0 else f"tag{i}"] = tag
+    r = _hyp_get(f"{HYPOTHESIS_API_BASE}/search", params=params)
+    if r.status_code >= 300:
+        raise HTTPException(status_code=500, detail=f"Hypothesis search failed: {r.status_code} {r.text[:800]}")
+    return (r.json().get("rows") or [])
+
+
+def hypothesis_create_annotation(payload: dict) -> dict:
+    r = _hyp_post(f"{HYPOTHESIS_API_BASE}/annotations", payload)
+    if r.status_code >= 300:
+        raise HTTPException(status_code=500, detail=f"Hypothesis create failed: {r.status_code} {r.text[:800]}")
+    return r.json()
+
+
+def prepare_model_suggestion_payload(
+    *,
+    group_id: str,
+    project_id: UUID,
+    doc_id: str,
+    uri: str,
+    code: str,
+    value: str,
+) -> tuple[str, dict]:
+    sid = stable_workspace_suggestion_id("model", project_id, doc_id, code, value)
+    tags = [
+        "source:model_suggestion",
+        "bot:hitl",
+        "status:suggested",
+        "implicit_accept:true",
+        f"project_id:{project_id}",
+        f"doc_id:{doc_id}",
+        f"field:{code}",
+        f"suggestion_id:{sid}",
+    ]
+    text = (
+        "[MODEL SUGGESTION]\n"
+        f"Code: {code}\n"
+        f"Suggested value: {value}\n\n"
+        "If this is correct, leave it unchanged. To reject or correct it, add your own review annotation "
+        "or reply with review:reject / review:corrected in this workspace."
+    )
+    return sid, {
+        "group": group_id,
+        "uri": uri,
+        "text": text,
+        "tags": tags,
+        "permissions": {"read": [f"group:{group_id}"]},
+    }
+
+
+def prepare_model_annotation_payload(
+    *,
+    group_id: str,
+    project_id: UUID,
+    doc_id: str,
+    uri: str,
+    annotation: HypothesisAnnotation,
+) -> tuple[str, dict]:
+    sid = stable_workspace_suggestion_id(
+        "model_annotation",
+        project_id,
+        doc_id,
+        annotation.annotation_id,
+        annotation.text or annotation.exact or "",
+    )
+    tags = [
+        "source:model_suggestion",
+        "bot:hitl",
+        "status:suggested",
+        "implicit_accept:true",
+        f"project_id:{project_id}",
+        f"doc_id:{doc_id}",
+        f"suggestion_id:{sid}",
+    ]
+    for tag in annotation.tags or []:
+        s = str(tag).strip()
+        if s and not s.lower().startswith("source:"):
+            tags.append(s)
+
+    text = (
+        "[MODEL SUGGESTION]\n"
+        f"{annotation.text or annotation.exact or ''}\n\n"
+        "If this is correct, leave it unchanged. To reject or correct it, add your own review annotation "
+        "or reply with review:reject / review:corrected in this workspace."
+    )
+    payload = {
+        "group": group_id,
+        "uri": uri,
+        "text": text,
+        "tags": tags,
+        "permissions": {"read": [f"group:{group_id}"]},
+    }
+    if annotation.exact:
+        payload["target"] = [
+            {
+                "source": uri,
+                "selector": [
+                    {
+                        "type": "TextQuoteSelector",
+                        "exact": annotation.exact,
+                        "prefix": annotation.prefix or "",
+                        "suffix": annotation.suffix or "",
+                    }
+                ],
+            }
+        ]
+    return sid, payload
+
+
+def prepare_gold_reference_payload(
+    *,
+    group_id: str,
+    project_id: UUID,
+    doc_id: str,
+    uri: str,
+    annotation: HypothesisAnnotation,
+) -> tuple[str, dict]:
+    rid = stable_workspace_suggestion_id(
+        "gold",
+        project_id,
+        doc_id,
+        annotation.annotation_id,
+        annotation.text or annotation.exact or "",
+    )
+    tags = [
+        "source:gold_reference",
+        "bot:hitl",
+        "status:reference",
+        f"project_id:{project_id}",
+        f"doc_id:{doc_id}",
+        f"gold_ref_id:{rid}",
+    ]
+    for tag in annotation.tags or []:
+        s = str(tag).strip()
+        if s and not s.lower().startswith("source:"):
+            tags.append(s)
+
+    text = (
+        "[GOLD REFERENCE]\n"
+        f"{annotation.text or annotation.exact or ''}\n\n"
+        "This is copied into your workspace as read-only reference material. It is not counted as your human annotation."
+    )
+    payload = {
+        "group": group_id,
+        "uri": uri,
+        "text": text,
+        "tags": tags,
+        "permissions": {"read": [f"group:{group_id}"]},
+    }
+    if annotation.exact:
+        payload["target"] = [
+            {
+                "source": uri,
+                "selector": [
+                    {
+                        "type": "TextQuoteSelector",
+                        "exact": annotation.exact,
+                        "prefix": annotation.prefix or "",
+                        "suffix": annotation.suffix or "",
+                    }
+                ],
+            }
+        ]
+    return rid, payload
 
 
 
@@ -2640,6 +2866,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
                 for raw in ann_list:
                     fields, _has_span, updated_str = hypothesis_extract(raw)
+                    fields["source_type"] = source_type_for_annotation(fields, group_role)
                     extracted.append(fields)
                     if fields.get("canonical_url"):
                         urls.append(fields["canonical_url"])
@@ -2657,7 +2884,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                     db,
                     extracted,
                     url_to_doc,
-                    source_type=source_type,
+                    source_type=source_type_for_group_role(group_role),
                     workspace_user_id=workspace_user_id,
                 )
                 db.commit()
@@ -2721,6 +2948,147 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 @app.post("/hypothesis/sync")
 def hypothesis_sync(payload: HypothesisSyncRequest):
     return run_hypothesis_sync(payload)
+
+
+@app.post("/hypothesis/prepare_workspace")
+def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Request):
+    uid = current_user_id(request)
+
+    db = SessionLocal()
+    try:
+        assert_project_member(db, payload.project_id, uid)
+
+        workspace = db.get(UserHypothesisWorkspace, uid)
+        if not workspace or workspace.group_id != payload.group_id:
+            raise HTTPException(403, "Can only prepare your own Hypothesis workspace")
+
+        group = db.get(HypothesisGroup, payload.group_id)
+        if not group:
+            raise HTTPException(404, "Workspace group not found")
+
+        doc_rows = (
+            db.execute(
+                select(Document.document_id, Document.canonical_url)
+                .join(ProjectDocument, ProjectDocument.document_id == Document.document_id)
+                .where(ProjectDocument.project_id == payload.project_id)
+            )
+            .all()
+        )
+        doc_ids = [str(did) for did, _ in doc_rows if did]
+        doc_url = {str(did): normalize_url(url) for did, url in doc_rows if did and url}
+
+        created_model = 0
+        skipped_model = 0
+        created_gold = 0
+        skipped_gold = 0
+        model_docs_with_annotations: set[str] = set()
+
+        if payload.include_model and doc_ids:
+            model_rows = (
+                db.execute(
+                    select(HypothesisAnnotation)
+                    .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
+                    .where(HypothesisGroup.group_role == "model")
+                    .where(HypothesisAnnotation.document_id.in_(doc_ids))
+                    .order_by(HypothesisAnnotation.updated.desc().nullslast())
+                )
+                .scalars()
+                .all()
+            )
+            for ann in model_rows:
+                if not ann.document_id:
+                    continue
+                uri = doc_url.get(ann.document_id) or ann.canonical_url
+                if not uri:
+                    continue
+                model_docs_with_annotations.add(ann.document_id)
+                sid, ann_payload = prepare_model_annotation_payload(
+                    group_id=payload.group_id,
+                    project_id=payload.project_id,
+                    doc_id=ann.document_id,
+                    uri=uri,
+                    annotation=ann,
+                )
+                existing = hypothesis_search_rows(payload.group_id, [f"suggestion_id:{sid}"], limit=1)
+                if existing:
+                    skipped_model += 1
+                    continue
+                hypothesis_create_annotation(ann_payload)
+                created_model += 1
+
+            solr_docs = fetch_model_export_docs(payload.core, doc_ids)
+            for d in solr_docs:
+                doc_id = d.get("document_id_s")
+                uri = doc_url.get(doc_id)
+                if not doc_id or not uri:
+                    continue
+                if doc_id in model_docs_with_annotations:
+                    continue
+                kv_items = d.get("code_value_model_norm_kv_ss") or d.get("code_value_model_kv_ss") or []
+                per_doc = 0
+                for code, value in parse_solr_kv(kv_items):
+                    if per_doc >= max(1, min(int(payload.max_per_doc), 500)):
+                        break
+                    sid, ann_payload = prepare_model_suggestion_payload(
+                        group_id=payload.group_id,
+                        project_id=payload.project_id,
+                        doc_id=doc_id,
+                        uri=uri,
+                        code=code,
+                        value=value,
+                    )
+                    existing = hypothesis_search_rows(payload.group_id, [f"suggestion_id:{sid}"], limit=1)
+                    if existing:
+                        skipped_model += 1
+                        continue
+                    hypothesis_create_annotation(ann_payload)
+                    created_model += 1
+                    per_doc += 1
+
+        if payload.include_gold and doc_ids:
+            gold_rows = (
+                db.execute(
+                    select(HypothesisAnnotation)
+                    .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
+                    .where(HypothesisGroup.group_role == "gold")
+                    .where(HypothesisAnnotation.document_id.in_(doc_ids))
+                    .order_by(HypothesisAnnotation.updated.desc().nullslast())
+                )
+                .scalars()
+                .all()
+            )
+            for ann in gold_rows:
+                if not ann.document_id:
+                    continue
+                uri = doc_url.get(ann.document_id) or ann.canonical_url
+                if not uri:
+                    continue
+                rid, ann_payload = prepare_gold_reference_payload(
+                    group_id=payload.group_id,
+                    project_id=payload.project_id,
+                    doc_id=ann.document_id,
+                    uri=uri,
+                    annotation=ann,
+                )
+                existing = hypothesis_search_rows(payload.group_id, [f"gold_ref_id:{rid}"], limit=1)
+                if existing:
+                    skipped_gold += 1
+                    continue
+                hypothesis_create_annotation(ann_payload)
+                created_gold += 1
+
+        return {
+            "ok": True,
+            "project_id": str(payload.project_id),
+            "group_id": payload.group_id,
+            "documents": len(doc_ids),
+            "created_model_suggestions": created_model,
+            "skipped_existing_model_suggestions": skipped_model,
+            "created_gold_references": created_gold,
+            "skipped_existing_gold_references": skipped_gold,
+        }
+    finally:
+        db.close()
 
 
 @app.post("/hypothesis/sync_stream")
@@ -2809,10 +3177,13 @@ def recompute_solr_codes(
 
         if source == "human":
             stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+            stmt = stmt.where(HypothesisAnnotation.source_type == "human")
         elif source == "gold":
             stmt = stmt.where(HypothesisGroup.group_role == "gold")
+            stmt = stmt.where(HypothesisAnnotation.source_type == "gold")
         else:
             stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
+            stmt = stmt.where(HypothesisAnnotation.source_type.in_(["human", "gold"]))
 
         if group_id:
             stmt = stmt.where(HypothesisAnnotation.group_id == group_id)
@@ -2823,6 +3194,8 @@ def recompute_solr_codes(
         for doc_id, tags in db.execute(stmt).yield_per(5000):
             scanned += 1
             if not doc_id:
+                continue
+            if has_reject_review_marker(tags):
                 continue
             if doc_scope is not None and doc_id not in doc_scope:
                 continue
@@ -3103,6 +3476,78 @@ def _normalize_tags(tags: Any) -> list[str]:
         return []
 
 
+REVIEW_REJECT_TAGS = {"review:reject", "review:rejected", "status:rejected", "reject"}
+
+
+def has_reject_review_marker(tags: Any) -> bool:
+    tag_set = {str(t).strip().lower() for t in _normalize_tags(tags)}
+    return bool(tag_set & REVIEW_REJECT_TAGS)
+
+
+def codes_from_tags_and_field_markers(
+    tags: Any,
+    canon_version: dict[str, str],
+    alias_to_canon: dict[str, str],
+    key_to_canon: dict[str, str],
+) -> list[tuple[str, str]]:
+    tag_list = _normalize_tags(tags)
+    resolved = resolve_codes_for_tags_cached(tag_list, canon_version, alias_to_canon, key_to_canon)
+    seen = {(code, ver) for code, ver in resolved}
+
+    for tag in tag_list:
+        if not tag.lower().startswith("field:"):
+            continue
+        field_value = tag.split(":", 1)[1].strip()
+        if not field_value:
+            continue
+        canonical = resolve_tag_to_canonical(field_value, canon_version, alias_to_canon, key_to_canon)
+        if not canonical:
+            continue
+        code_ver = canon_version.get(canonical)
+        if code_ver:
+            seen.add((canonical, code_ver))
+
+    return sorted(seen)
+
+
+def collect_rejected_review_codes(
+    db,
+    doc_ids: list[str],
+    user_id: str,
+    canon_version: dict[str, str],
+    alias_to_canon: dict[str, str],
+    key_to_canon: dict[str, str],
+    *,
+    version: str = "all",
+    code_filter: Optional[str] = None,
+) -> set[tuple[str, str]]:
+    stmt = (
+        select(HypothesisAnnotation.document_id, HypothesisAnnotation.tags)
+        .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
+        .where(HypothesisAnnotation.document_id.in_(doc_ids))
+        .where(HypothesisGroup.group_role == "human_workspace")
+        .where(HypothesisAnnotation.source_type == "human")
+    )
+
+    rejected: set[tuple[str, str]] = set()
+    for doc_id, tags in db.execute(stmt).yield_per(5000):
+        if not doc_id or not has_reject_review_marker(tags):
+            continue
+        for canonical_code, code_ver in codes_from_tags_and_field_markers(
+            tags,
+            canon_version,
+            alias_to_canon,
+            key_to_canon,
+        ):
+            if code_filter and canonical_code != code_filter:
+                continue
+            if version != "all" and code_ver != version:
+                continue
+            rejected.add((doc_id, canonical_code))
+
+    return rejected
+
+
 def build_wide_aggregates(
     db,
     doc_ids: list[str],
@@ -3138,16 +3583,21 @@ def build_wide_aggregates(
 
     if source_filter == "human":
         stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+        stmt = stmt.where(HypothesisAnnotation.source_type == "human")
     elif source_filter == "gold":
         stmt = stmt.where(HypothesisGroup.group_role == "gold")
+        stmt = stmt.where(HypothesisAnnotation.source_type == "gold")
     else:
         stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
+        stmt = stmt.where(HypothesisAnnotation.source_type.in_(["human", "gold"]))
 
     for doc_id, tags, text, updated in db.execute(stmt).yield_per(5000):
         if not doc_id:
             continue
 
         tag_list = _normalize_tags(tags)
+        if has_reject_review_marker(tag_list):
+            continue
 
         resolved = resolve_codes_for_tags_cached(
             tag_list, canon_version, alias_to_canon, key_to_canon
@@ -3303,8 +3753,8 @@ def export_csv(
     source: str = "all",
     include_annotators: bool = False,
 ):
-    if source not in {"human", "gold", "model", "all"}:
-        raise HTTPException(400, "source must be human|gold|model|all")
+    if source not in {"reviewed", "human", "gold", "model", "all"}:
+        raise HTTPException(400, "source must be reviewed|human|gold|model|all")
     if version not in {"v1", "ext", "all"}:
         raise HTTPException(400, "version must be v1|ext|all")
 
@@ -3360,7 +3810,7 @@ def export_csv(
             # -------------------------
             human_agg: dict[tuple[str, str, str], dict] = {}
 
-            if source in {"human", "gold", "all"}:
+            if source in {"reviewed", "human", "gold", "all"}:
                 stmt = (
                     select(
                         HypothesisAnnotation.document_id,
@@ -3378,16 +3828,21 @@ def export_csv(
 
                 if source == "human":
                     stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+                    stmt = stmt.where(HypothesisAnnotation.source_type == "human")
                 elif source == "gold":
                     stmt = stmt.where(HypothesisGroup.group_role == "gold")
+                    stmt = stmt.where(HypothesisAnnotation.source_type == "gold")
                 else:
                     stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
+                    stmt = stmt.where(HypothesisAnnotation.source_type.in_(["human", "gold"]))
 
                 for doc_id, tags, text, exact, user_, updated, group_role in db.execute(stmt).yield_per(5000):
                     if not doc_id:
                         continue
 
                     tag_list = _normalize_tags(tags)
+                    if has_reject_review_marker(tag_list):
+                        continue
                     resolved = resolve_codes_for_tags_cached(tag_list, canon_version, alias_to_canon, key_to_canon)
                     if not resolved:
                         continue
@@ -3441,17 +3896,129 @@ def export_csv(
             # -------------------------
             model_agg: dict[tuple[str, str], dict] = {}
 
-            if source in {"model", "all"}:
+            if source in {"reviewed", "model", "all"}:
+                stmt_model = (
+                    select(
+                        HypothesisAnnotation.document_id,
+                        HypothesisAnnotation.tags,
+                        HypothesisAnnotation.text,
+                        HypothesisAnnotation.updated,
+                    )
+                    .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
+                    .where(HypothesisAnnotation.document_id.in_(doc_ids))
+                    .where(HypothesisGroup.group_role == "model")
+                    .where(HypothesisAnnotation.source_type == "model")
+                )
+                for doc_id, tags, text, updated in db.execute(stmt_model).yield_per(5000):
+                    if not doc_id:
+                        continue
+                    tag_list = _normalize_tags(tags)
+                    resolved = resolve_codes_for_tags_cached(tag_list, canon_version, alias_to_canon, key_to_canon)
+                    if not resolved:
+                        continue
+                    val = (text or "").strip()
+                    upd = parse_dt_utc(updated)
+                    for canonical_code, code_ver in resolved:
+                        if code_filter and canonical_code != code_filter:
+                            continue
+                        if version != "all" and code_ver != version:
+                            continue
+                        key = (doc_id, canonical_code)
+                        rec = model_agg.get(key)
+                        if not rec:
+                            rec = {
+                                "code_version": code_ver,
+                                "values_set": set(),
+                                "latest_value": None,
+                                "latest_updated": None,
+                            }
+                            model_agg[key] = rec
+                        if val:
+                            rec["values_set"].add(val)
+                            if upd and (rec["latest_updated"] is None or upd > rec["latest_updated"]):
+                                rec["latest_updated"] = upd
+                                rec["latest_value"] = val
+                            elif rec["latest_value"] is None:
+                                rec["latest_value"] = val
+
                 solr_docs = fetch_model_export_docs(core, doc_ids)
                 solr_docs = [
                     d for d in solr_docs
                     if (d.get("code_value_model_norm_kv_ss") or d.get("code_value_model_kv_ss"))
                 ]
 
-                model_agg = build_model_long_aggregates(
+                solr_model_agg = build_model_long_aggregates(
                     solr_docs,
                     code_filter=(None if code_filter in {None, "__NO_MATCH__"} else code_filter),
                 )
+                for key, rec in solr_model_agg.items():
+                    model_agg.setdefault(key, rec)
+
+            if source == "reviewed":
+                rejected = collect_rejected_review_codes(
+                    db,
+                    doc_ids,
+                    uid,
+                    canon_version,
+                    alias_to_canon,
+                    key_to_canon,
+                    version=version,
+                    code_filter=(None if code_filter in {None, "__NO_MATCH__"} else code_filter),
+                )
+                final_keys = (
+                    {(doc_id, canonical_code) for (doc_id, canonical_code, _source_label) in human_agg.keys()}
+                    | set(model_agg.keys())
+                )
+
+                for doc_id, canonical_code in sorted(final_keys):
+                    human_rec = human_agg.get((doc_id, canonical_code, "human"))
+                    gold_rec = human_agg.get((doc_id, canonical_code, "gold"))
+                    model_rec = model_agg.get((doc_id, canonical_code))
+
+                    source_label = ""
+                    value_mode = ""
+                    rec = None
+                    if human_rec:
+                        rec = human_rec
+                        source_label = "human"
+                        value_mode = "latest_nonempty_text"
+                    elif gold_rec:
+                        rec = gold_rec
+                        source_label = "gold"
+                        value_mode = "gold_reference"
+                    elif (doc_id, canonical_code) not in rejected and model_rec:
+                        rec = model_rec
+                        source_label = "model_implicit_accept"
+                        value_mode = "implicit_accept_unchanged_model"
+
+                    if not rec:
+                        continue
+
+                    values_list = sorted(list(rec["values_set"]))
+                    row = {
+                        "project_id": str(project_id),
+                        "document_id": doc_id,
+                        "canonical_url": doc_url.get(doc_id) or "",
+                        "code": canonical_code,
+                        "code_version": rec.get("code_version") or "unknown",
+                        "source": source_label,
+                        "value": rec.get("latest_value") or "",
+                        "value_mode": value_mode,
+                        "values": json.dumps(values_list, ensure_ascii=False),
+                        "n_values": len(values_list),
+                        "has_span": bool(rec.get("has_span")) if source_label != "model_implicit_accept" else False,
+                        "span_examples": " || ".join(rec.get("span_examples") or []) if source_label != "model_implicit_accept" else "",
+                        "n_annotations": rec.get("n_annotations", 0) if source_label != "model_implicit_accept" else 0,
+                        "latest_updated": iso_z(rec.get("latest_updated")),
+                    }
+                    if include_annotators:
+                        row["annotators"] = ";".join(sorted(rec.get("annotators") or [])) if source_label != "model_implicit_accept" else ""
+
+                    w.writerow(row)
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate(0)
+                return
 
             # -------------------------
             # Emit human rows
@@ -3541,8 +4108,8 @@ def export_csv_wide(
 ):
     if version not in {"v1", "ext", "all"}:
         raise HTTPException(400, "version must be v1|ext|all")
-    if source not in {"human", "gold", "model", "all"}:
-        raise HTTPException(400, "source must be human|gold|model|all")
+    if source not in {"reviewed", "human", "gold", "model", "all"}:
+        raise HTTPException(400, "source must be reviewed|human|gold|model|all")
     if metric not in {"value", "count", "binary"}:
         raise HTTPException(400, "metric must be value|count|binary")
 
@@ -3589,7 +4156,7 @@ def export_csv_wide(
         gold_per_doc: dict[str, dict[str, dict]] = {}
         gold_codes_seen: set[str] = set()
 
-        if source in {"human", "all"} and code_filter != "__NO_MATCH__":
+        if source in {"reviewed", "human", "all"} and code_filter != "__NO_MATCH__":
             per_doc, codes_seen = build_wide_aggregates(
                 db,
                 doc_ids,
@@ -3601,7 +4168,7 @@ def export_csv_wide(
                 source_filter="human",
             )
 
-        if source in {"gold", "all"} and code_filter != "__NO_MATCH__":
+        if source in {"reviewed", "gold", "all"} and code_filter != "__NO_MATCH__":
             gold_per_doc, gold_codes_seen = build_wide_aggregates(
                 db,
                 doc_ids,
@@ -3621,24 +4188,82 @@ def export_csv_wide(
         model_per_doc: dict[str, dict[str, dict]] = {}
         model_codes_seen: set[str] = set()
 
-        if source in {"model", "all"} and code_filter != "__NO_MATCH__":
+        if source in {"reviewed", "model", "all"} and code_filter != "__NO_MATCH__":
+            stmt_model = (
+                select(
+                    HypothesisAnnotation.document_id,
+                    HypothesisAnnotation.tags,
+                    HypothesisAnnotation.text,
+                    HypothesisAnnotation.updated,
+                )
+                .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
+                .where(HypothesisAnnotation.document_id.in_(doc_ids))
+                .where(HypothesisGroup.group_role == "model")
+                .where(HypothesisAnnotation.source_type == "model")
+            )
+            for doc_id, tags, text, updated in db.execute(stmt_model).yield_per(5000):
+                if not doc_id:
+                    continue
+                tag_list = _normalize_tags(tags)
+                resolved = resolve_codes_for_tags_cached(tag_list, canon_version, alias_to_canon, key_to_canon)
+                if not resolved:
+                    continue
+                val = (text or "").strip()
+                upd = parse_dt_utc(updated)
+                bucket = model_per_doc.setdefault(doc_id, {})
+                for canonical_code, code_ver in resolved:
+                    if code_filter and canonical_code != code_filter:
+                        continue
+                    if version != "all" and code_ver != version:
+                        continue
+                    model_codes_seen.add(canonical_code)
+                    rec = bucket.get(canonical_code)
+                    if not rec:
+                        rec = {"count": 0, "latest_value": None, "latest_updated": None}
+                        bucket[canonical_code] = rec
+                    rec["count"] += 1
+                    if val:
+                        if upd and (rec["latest_updated"] is None or upd > rec["latest_updated"]):
+                            rec["latest_updated"] = upd
+                            rec["latest_value"] = val
+                        elif rec["latest_value"] is None:
+                            rec["latest_value"] = val
+
             solr_docs = fetch_model_export_docs(core, doc_ids)
             solr_docs = [
                 d for d in solr_docs
                 if (d.get("code_value_model_norm_kv_ss") or d.get("code_value_model_kv_ss"))
             ]
 
-            model_per_doc, model_codes_seen = build_model_wide_aggregates(
+            solr_model_per_doc, solr_model_codes_seen = build_model_wide_aggregates(
                 solr_docs,
                 code_filter=(None if code_filter in {None, "__NO_MATCH__"} else code_filter),
             )
+            model_codes_seen.update(solr_model_codes_seen)
+            for doc_id_, bucket in solr_model_per_doc.items():
+                target = model_per_doc.setdefault(doc_id_, {})
+                for canonical_code, rec in bucket.items():
+                    target.setdefault(canonical_code, rec)
 
         base_cols = allowed_column_orders[column_order]
 
         codes_sorted = sorted(list(codes_seen))
         model_codes_sorted = sorted(list(model_codes_seen))
 
-        if source == "human":
+        if source == "reviewed":
+            reviewed_codes_sorted = sorted(list(codes_seen | gold_codes_seen | model_codes_seen))
+            code_cols = [csv_safe_col(c) for c in reviewed_codes_sorted]
+            rejected_codes = collect_rejected_review_codes(
+                db,
+                doc_ids,
+                uid,
+                canon_version,
+                alias_to_canon,
+                key_to_canon,
+                version=version,
+                code_filter=(None if code_filter in {None, "__NO_MATCH__"} else code_filter),
+            )
+        elif source == "human":
             code_cols = [csv_safe_col(c) for c in codes_sorted]
         elif source == "gold":
             code_cols = [csv_safe_col(c) for c in sorted(list(gold_codes_seen))]
@@ -3669,7 +4294,26 @@ def export_csv_wide(
                 human_bucket = per_doc.get(doc_id_, {})
                 model_bucket = model_per_doc.get(doc_id_, {})
 
-                if source == "human":
+                if source == "reviewed":
+                    gold_bucket = gold_per_doc.get(doc_id_, {})
+                    for canonical_code in reviewed_codes_sorted:
+                        col = csv_safe_col(canonical_code)
+                        rec = human_bucket.get(canonical_code)
+                        if not rec:
+                            rec = gold_bucket.get(canonical_code)
+                        if not rec and (doc_id_, canonical_code) not in rejected_codes:
+                            rec = model_bucket.get(canonical_code)
+
+                        if not rec:
+                            row[col] = "" if metric == "value" else 0
+                        elif metric == "value":
+                            row[col] = rec.get("latest_value") or ""
+                        elif metric == "count":
+                            row[col] = rec.get("count", 0)
+                        else:
+                            row[col] = 1
+
+                elif source == "human":
                     for canonical_code in codes_sorted:
                         col = csv_safe_col(canonical_code)
                         rec = human_bucket.get(canonical_code)

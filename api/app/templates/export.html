@@ -2,7 +2,7 @@
 {% block content %}
 <h1>Extract Data</h1>
 <div class="muted" style="font-size:12px; margin:8px 0 12px 0;">
-  Both exports draw from the same extracted coding set, but they present it differently. The Long CSV shows one row per document-code pair, which is useful for detailed review of individual extracted fields. The Wide CSV shows one row per document, with extracted codes arranged across columns, which is more suitable for spreadsheet-based analysis. In short, the Long CSV is more detailed, while the Wide CSV is more analysis-ready.
+  Both exports draw from the same extracted coding set, but they present it differently. The reviewed export keeps human corrections first, then gold references, then unchanged model suggestions as implicit accepts. Rejected suggestions are excluded.
 </div>
 
 <div class="card">
@@ -16,6 +16,7 @@
 
     <label class="muted">Coding source</label>
     <select name="source">
+      <option value="reviewed" {% if source == "reviewed" %}selected{% endif %}>Final reviewed dataset</option>
       <option value="human" {% if source == "human" %}selected{% endif %}>Human workspace only</option>
       <option value="gold" {% if source == "gold" %}selected{% endif %}>Gold only</option>
       <option value="model" {% if source == "model" %}selected{% endif %}>AI only</option>
@@ -69,6 +70,6 @@
 
 <div class="muted" style="margin-top:12px;">
   Long CSV = one row per (document, code). Wide CSV = one row per document with codes as columns.
-  The column order selector changes the first three wide-export columns; code columns remain alphabetical for consistency, and when exporting all coding sources, human, gold, and AI columns are shown separately.
+  The column order selector changes the first three wide-export columns; code columns remain alphabetical for consistency. Use “Final reviewed dataset” for the normal HITL output, or the separate source options for audit checks.
 </div>
 {% endblock %}

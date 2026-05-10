@@ -26,7 +26,8 @@
   <p class="muted">
     The platform supports a review process in which documents are collected into projects and coded using a
     structured coding scheme. In many cases, the system may already show suggested values or model-generated
-    coding. A reviewer then checks these suggestions, confirms them, corrects them, or rejects them.
+    coding. A reviewer then checks these suggestions and only acts when something needs to be rejected,
+    corrected, or added.
   </p>
   <p class="muted">
     In simple terms, the platform helps you do four things:
@@ -89,13 +90,14 @@
 
   <h3>5) Review Coding</h3>
   <p class="muted">
-    The platform may contain human-reviewed values, AI/model-suggested values, or both. In many workflows,
-    the next step after opening a document is to review the coding evidence in Hypothesis and decide whether
-    the current suggestions are correct.
+    The platform can copy model suggestions and gold reference annotations into your own Hypothesis workspace
+    for the selected project. The original model and gold groups are not exposed for editing. Your workspace is
+    where you review, reject, correct, and add annotations.
   </p>
   <p class="muted">
-    This is especially important when the system has proposed a coding value but a reviewer needs to confirm
-    whether the value is supported by the document text.
+    If a copied model suggestion is correct, you do not need to accept it manually. Leaving it unchanged means it
+    is treated as an implicit accept during export. If it is wrong, add a rejection or correction in your
+    workspace. This keeps the review workload low and preserves the original model and gold records.
   </p>
 
   <h3>6) Export Data</h3>
@@ -104,7 +106,9 @@
     The export page allows you to choose the coding version, coding source, and export format.
   </p>
   <p class="muted">
-    This is useful when you want to analyse results outside the platform or share them with others.
+    The normal HITL export is the final reviewed dataset: human corrections and additions first, then gold
+    references, then unchanged model suggestions as implicit accepts. Rejected suggestions and superseded model
+    values are not included in that final output.
   </p>
 </div>
 
@@ -118,16 +122,16 @@
     <li><b>Select the correct project</b> from the project area.</li>
     <li><b>Open Search Documents</b> and locate a case you want to review.</li>
     <li><b>Open the document</b> and read the excerpt or case text.</li>
-    <li><b>Open Hypothesis</b> if annotation review is required.</li>
-    <li><b>Check the coding</b>: accept, reject, or correct values where needed.</li>
+    <li><b>Sync your workspace</b> so model suggestions and gold references are copied into your Hypothesis group.</li>
+    <li><b>Open Hypothesis</b> and review the copied suggestions in your own group.</li>
+    <li><b>Check the coding</b>: leave correct suggestions unchanged, and only reject, correct, or add values where needed.</li>
     <li><b>Return to the workspace</b> and continue with the next document.</li>
     <li><b>Export data</b> when you are ready to analyse or share the results.</li>
   </ol>
 
   <div class="alert">
-    <b>Important:</b> If you cannot see annotations in Hypothesis, the most common reason is that the wrong
-    Hypothesis group is selected. Make sure you are working in the correct group rather than “Public”, then
-    refresh the page if needed.
+    <b>Important:</b> If you cannot see annotations in Hypothesis, first sync your workspace for the selected
+    project. Then make sure Hypothesis is showing your personal group rather than “Public” or another group.
   </div>
 </div>
 
@@ -473,9 +477,13 @@
 
   <h3>Coding source</h3>
   <p class="muted">
-    Where available, exports may let you choose whether you want to export human-reviewed coding only,
-    AI/model coding only, or all coding sources. If all coding sources are exported, the output may distinguish
-    clearly between human and model values so the source remains visible.
+    For normal HITL work, choose <b>Final reviewed dataset</b>. This export combines the reviewer’s corrections
+    and additions with gold references and unchanged model suggestions. Separate human-only, gold-only, model-only,
+    and all-source exports are available for audit checks and troubleshooting.
+  </p>
+  <p class="muted">
+    The final reviewed dataset excludes suggestions that were explicitly rejected and excludes model values that
+    were superseded by a human correction for the same document and code.
   </p>
 </div>
 
@@ -514,8 +522,9 @@
 
   <h3>I opened a document but I cannot see annotations.</h3>
   <p class="muted">
-    Check that Hypothesis is open and that the correct group is selected. If the group is wrong, the annotations
-    may not appear even though they exist.
+    Check that you have selected a project and run <b>Sync My Workspace</b>. The sync copies only annotations for
+    documents in the selected project into your personal Hypothesis group. Then check that Hypothesis is open and
+    showing your group.
   </p>
 
   <h3>Why do some documents show more extracted codes than others?</h3>

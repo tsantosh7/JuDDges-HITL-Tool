@@ -16,7 +16,7 @@
     <div id="sync-bar" style="height:14px; width:0%; background:#2563eb;"></div>
   </div>
 
-  <div id="sync-status" class="muted" style="margin-top:12px;">Starting sync...</div>
+  <div id="sync-status" class="muted" style="margin-top:12px;">Preparing workspace...</div>
 
   <div class="meta" style="margin-top:12px;">
     <span class="pill">documents: <span id="sync-docs">0/0</span></span>
@@ -34,7 +34,8 @@
 </div>
 
 <script>
-const payload = {{ payload | tojson }};
+const syncPayload = {{ sync_payload | tojson }};
+const preparePayload = {{ prepare_payload | tojson }};
 const bar = document.getElementById("sync-bar");
 const statusEl = document.getElementById("sync-status");
 const docsEl = document.getElementById("sync-docs");
@@ -82,10 +83,31 @@ function updateProgress(data) {
 
 async function runSync() {
   try {
+    bar.style.width = "3%";
+    statusEl.textContent = "Copying model suggestions and gold references into your workspace...";
+    logLine("Preparing workspace review items...");
+    const prepareResponse = await fetch("/hypothesis/prepare_workspace", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(preparePayload)
+    });
+    const prepareData = await prepareResponse.json().catch(() => ({}));
+    if (!prepareResponse.ok) {
+      throw new Error(prepareData.detail || "Workspace preparation failed: " + prepareResponse.status);
+    }
+    logLine(
+      "Prepared workspace: " +
+      (prepareData.created_model_suggestions || 0) + " model suggestions copied, " +
+      (prepareData.created_gold_references || 0) + " gold references copied, " +
+      (prepareData.skipped_existing_model_suggestions || 0) + " existing suggestions skipped."
+    );
+    bar.style.width = "8%";
+    statusEl.textContent = "Syncing your workspace back to the server...";
+
     const response = await fetch("/hypothesis/sync_stream", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(payload)
+      body: JSON.stringify(syncPayload)
     });
 
     if (!response.ok || !response.body) {

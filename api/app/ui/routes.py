@@ -1083,7 +1083,7 @@ async def ui_export_page(
     request: Request,
     project_id: Optional[UUID] = None,
     version: str = "all",
-    source: str = "human",
+    source: str = "reviewed",
     code: Optional[str] = None,
     include_annotators: Optional[str] = None,
     metric: str = "value",
@@ -1885,6 +1885,14 @@ async def ui_hypothesis_sync_workspace_page(
         "force_full": False,
         "include_public": False,
     }
+    prepare_payload = {
+        "core": core,
+        "group_id": group_id,
+        "project_id": project_id,
+        "include_model": True,
+        "include_gold": True,
+        "max_per_doc": 80,
+    }
     return request.app.state.templates.TemplateResponse(
         "hypothesis_sync.html",
         {
@@ -1893,7 +1901,8 @@ async def ui_hypothesis_sync_workspace_page(
             "project_id": project_id,
             "project_name": _get_project_name(request),
             "group_id": group_id,
-            "payload": payload,
+            "sync_payload": payload,
+            "prepare_payload": prepare_payload,
         },
     )
 
@@ -1920,13 +1929,30 @@ async def ui_hypothesis_sync_workspace(
         db.close()
 
     core = (request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip() or "hitl_test"
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    await asgi_post_json(
+        request,
+        "/hypothesis/prepare_workspace",
+        {
+            "core": core,
+            "group_id": group_id,
+            "project_id": project_id,
+            "include_model": True,
+            "include_gold": True,
+            "max_per_doc": 80,
+        },
+        timeout_s=300.0,
+    )
     res = await asgi_post_json(
         request,
         "/hypothesis/sync",
         {
             "core": core,
             "group_id": group_id,
-            "project_id": _get_project_id(request),
+            "project_id": project_id,
             "all_groups": False,
             "only_enabled_groups": False,
             "write_snapshot": True,
