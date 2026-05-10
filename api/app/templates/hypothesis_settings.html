@@ -11,10 +11,15 @@
   <p class="muted">
     Choose the <strong>private</strong> Hypothesis group where this project will be reviewed.
     Model suggestions and gold references are copied into this group without exposing the original source groups.
+    The same shared review group can be reused across many projects; the app separates work using project and document tags.
   </p>
   <div class="muted" style="font-size:12px; margin-bottom:12px;">
     Project: <strong>{{ project_name or project_id }}</strong>
     <span class="mono">({{ project_id }})</span>
+  </div>
+  <div class="alert" style="margin-top:10px;">
+    Recommended default: use one shared review group for collaborative projects. Create a separate group only when a
+    project has restricted membership or confidentiality requirements.
   </div>
 
   {% if current_gid %}
@@ -75,7 +80,7 @@
   <ul class="muted" style="margin-top:6px;">
     <li><strong>Model predictions</strong>: shared group (read for everyone)</li>
     <li><strong>Gold annotations</strong>: shared group, restricted membership</li>
-    <li><strong>Project review workspace</strong>: private group with the reviewers and the server Hypothesis account</li>
+    <li><strong>Shared review workspace</strong>: private group with the reviewers and the server Hypothesis account; reusable across projects</li>
   </ul>
 </div>
 
