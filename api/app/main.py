@@ -2511,201 +2511,201 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
         })
 
         for gi, gid in enumerate(group_ids, start=1):
+            lock_acquired = False
             g_row = db.get(HypothesisGroup, gid)
             if not acquire_hypothesis_group_sync_lock(db, gid, sync_owner):
                 totals["groups_skipped_locked"] += 1
                 _emit("group_skipped", {"group_id": gid, "reason": "sync_locked"})
                 continue
+            lock_acquired = True
 
-            g_row = db.get(HypothesisGroup, gid)
-            group_role = getattr(g_row, "group_role", None) or infer_hypothesis_group_role(gid)
-            source_type = source_type_for_group_role(group_role)
-            workspace_user_id = None
-            if group_role == "human_workspace":
-                workspace_user_id = (
-                    db.execute(
-                        select(UserHypothesisWorkspace.user_id)
-                        .where(UserHypothesisWorkspace.group_id == gid)
-                        .limit(1)
+            try:
+                g_row = db.get(HypothesisGroup, gid)
+                group_role = getattr(g_row, "group_role", None) or infer_hypothesis_group_role(gid)
+                source_type = source_type_for_group_role(group_role)
+                workspace_user_id = None
+                if group_role == "human_workspace":
+                    workspace_user_id = (
+                        db.execute(
+                            select(UserHypothesisWorkspace.user_id)
+                            .where(UserHypothesisWorkspace.group_id == gid)
+                            .limit(1)
+                        )
+                        .scalars()
+                        .first()
                     )
-                    .scalars()
-                    .first()
-                )
-            cursor = None
-            if g_row and not payload.force_full and not scoped_urls:
-                cursor = g_row.last_synced_updated
+                cursor = None
+                if g_row and not payload.force_full and not scoped_urls:
+                    cursor = g_row.last_synced_updated
 
-            _emit("group_start", {
-                "group_id": gid,
-                "group_role": group_role,
-                "source_type": source_type,
-                "i": gi,
-                "n": groups_total,
-                "cursor": cursor,
-            })
+                _emit("group_start", {
+                    "group_id": gid,
+                    "group_role": group_role,
+                    "source_type": source_type,
+                    "i": gi,
+                    "n": groups_total,
+                    "cursor": cursor,
+                })
 
-            # Progress: group start
-            _emit("progress", {
-                "phase": "group_start",
-                "group_id": gid,
-                "group_role": group_role,
-                "source_type": source_type,
-                "group_i": gi,
-                "groups_total": groups_total,
-                "groups_done": totals["groups_synced"],
-                "annotations_seen": totals["annotations_seen"],
-                "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
-                "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
-            })
+                # Progress: group start
+                _emit("progress", {
+                    "phase": "group_start",
+                    "group_id": gid,
+                    "group_role": group_role,
+                    "source_type": source_type,
+                    "group_i": gi,
+                    "groups_total": groups_total,
+                    "groups_done": totals["groups_synced"],
+                    "annotations_seen": totals["annotations_seen"],
+                    "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                    "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+                })
 
-            ann_by_id: Dict[str, dict] = {}
-            last_updated_seen: Optional[str] = None
+                ann_by_id: Dict[str, dict] = {}
+                last_updated_seen: Optional[str] = None
 
-            # Fetch annotations (paginated)
-            if scoped_urls:
-                for doc_i, uri in enumerate(scoped_urls, start=1):
-                    _emit("progress", {
-                        "phase": "fetching_project_document",
-                        "group_id": gid,
-                        "group_i": gi,
-                        "groups_total": groups_total,
-                        "groups_done": totals["groups_synced"],
-                        "document_i": doc_i,
-                        "documents_total": len(scoped_urls),
-                        "annotations_seen": totals["annotations_seen"],
-                        "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
-                        "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
-                    })
+                # Fetch annotations (paginated)
+                if scoped_urls:
+                    for doc_i, uri in enumerate(scoped_urls, start=1):
+                        _emit("progress", {
+                            "phase": "fetching_project_document",
+                            "group_id": gid,
+                            "group_i": gi,
+                            "groups_total": groups_total,
+                            "groups_done": totals["groups_synced"],
+                            "document_i": doc_i,
+                            "documents_total": len(scoped_urls),
+                            "annotations_seen": totals["annotations_seen"],
+                            "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                            "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+                        })
+                        for raw in hypothesis_iter_group_annotations(
+                            gid,
+                            limit=payload.limit_per_request,
+                            uri=uri,
+                        ):
+                            ann_id = raw.get("id")
+                            if ann_id:
+                                ann_by_id[ann_id] = raw
+                            last_updated_seen = raw.get("updated") or last_updated_seen
+                else:
                     for raw in hypothesis_iter_group_annotations(
                         gid,
                         limit=payload.limit_per_request,
-                        uri=uri,
+                        search_after=cursor,
                     ):
                         ann_id = raw.get("id")
                         if ann_id:
                             ann_by_id[ann_id] = raw
                         last_updated_seen = raw.get("updated") or last_updated_seen
-            else:
-                for raw in hypothesis_iter_group_annotations(
-                    gid,
-                    limit=payload.limit_per_request,
-                    search_after=cursor,
-                ):
-                    ann_id = raw.get("id")
-                    if ann_id:
-                        ann_by_id[ann_id] = raw
-                    last_updated_seen = raw.get("updated") or last_updated_seen
 
-                    # Emit periodic progress so clients can show activity
-                    if len(ann_by_id) % 500 == 0:
-                        _emit("progress", {
-                            "phase": "fetching",
-                            "group_id": gid,
-                            "group_i": gi,
-                            "groups_total": groups_total,
-                            "groups_done": totals["groups_synced"],
-                            "group_annotations_fetched": len(ann_by_id),
-                            "annotations_seen": totals["annotations_seen"],
-                            "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
-                            "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
-                        })
+                        # Emit periodic progress so clients can show activity
+                        if len(ann_by_id) % 500 == 0:
+                            _emit("progress", {
+                                "phase": "fetching",
+                                "group_id": gid,
+                                "group_i": gi,
+                                "groups_total": groups_total,
+                                "groups_done": totals["groups_synced"],
+                                "group_annotations_fetched": len(ann_by_id),
+                                "annotations_seen": totals["annotations_seen"],
+                                "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                                "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+                            })
 
-            ann_list: List[dict] = list(ann_by_id.values())
-            _emit("progress", {
-                "phase": "group_fetched",
-                "group_id": gid,
-                "group_i": gi,
-                "groups_total": groups_total,
-                "groups_done": totals["groups_synced"],
-                "documents_total": len(scoped_urls),
-                "group_annotations_fetched": len(ann_list),
-                "annotations_seen": totals["annotations_seen"],
-                "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
-                "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
-            })
+                ann_list: List[dict] = list(ann_by_id.values())
+                _emit("progress", {
+                    "phase": "group_fetched",
+                    "group_id": gid,
+                    "group_i": gi,
+                    "groups_total": groups_total,
+                    "groups_done": totals["groups_synced"],
+                    "documents_total": len(scoped_urls),
+                    "group_annotations_fetched": len(ann_list),
+                    "annotations_seen": totals["annotations_seen"],
+                    "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                    "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+                })
 
-            _emit("group_fetched", {"group_id": gid, "annotations_fetched": len(ann_list)})
+                _emit("group_fetched", {"group_id": gid, "annotations_fetched": len(ann_list)})
 
-            if payload.write_snapshot:
-                path = snapshot_path_for_group(gid)
-                write_snapshot_jsonl(path, ann_list)
-                _emit("snapshot", {"group_id": gid, "path": path, "count": len(ann_list)})
+                if payload.write_snapshot:
+                    path = snapshot_path_for_group(gid)
+                    write_snapshot_jsonl(path, ann_list)
+                    _emit("snapshot", {"group_id": gid, "path": path, "count": len(ann_list)})
 
-            extracted: List[dict] = []
-            urls: List[str] = []
-            max_updated_str: Optional[str] = None if scoped_urls else cursor
+                extracted: List[dict] = []
+                urls: List[str] = []
+                max_updated_str: Optional[str] = None if scoped_urls else cursor
 
-            for raw in ann_list:
-                fields, _has_span, updated_str = hypothesis_extract(raw)
-                extracted.append(fields)
-                if fields.get("canonical_url"):
-                    urls.append(fields["canonical_url"])
-                if updated_str:
-                    max_updated_str = updated_str  # sorted asc, so last wins
+                for raw in ann_list:
+                    fields, _has_span, updated_str = hypothesis_extract(raw)
+                    extracted.append(fields)
+                    if fields.get("canonical_url"):
+                        urls.append(fields["canonical_url"])
+                    if updated_str:
+                        max_updated_str = updated_str  # sorted asc, so last wins
 
-            urls_unique = list({normalize_url(u) for u in urls if u})
-            urls_unique = [u for u in urls_unique if u]
-            _emit("resolve_urls", {"group_id": gid, "unique_urls": len(urls_unique)})
+                urls_unique = list({normalize_url(u) for u in urls if u})
+                urls_unique = [u for u in urls_unique if u]
+                _emit("resolve_urls", {"group_id": gid, "unique_urls": len(urls_unique)})
 
-            url_to_doc = bulk_resolve_document_ids(db, urls_unique)
-            _emit("resolved", {"group_id": gid, "matched_docs": len(set(url_to_doc.values()))})
+                url_to_doc = bulk_resolve_document_ids(db, urls_unique)
+                _emit("resolved", {"group_id": gid, "matched_docs": len(set(url_to_doc.values()))})
 
-            seen, linked, doc_flags, doc_codes = upsert_annotations_bulk(
-                db,
-                extracted,
-                url_to_doc,
-                source_type=source_type,
-                workspace_user_id=workspace_user_id,
-            )
-            db.commit()
-            updated_docs = solr_update_flags_for_docs(payload.core, doc_flags, doc_codes=doc_codes)
-
-            _emit("codes_summary", {
-                "group_id": gid,
-                "docs_with_codes": len(doc_codes),
-                "docs_with_flags": len(doc_flags),
-                "sample_doc_id": next(iter(doc_codes.keys()), None),
-                "sample_codes_all_count": (len(next(iter(doc_codes.values()))["all"]) if doc_codes else 0),
-            })
-
-            # if g_row and not payload.force_full and max_updated_str:
-            #     g_row.last_synced_updated = max_updated_str
-            #     g_row.last_synced_at = datetime.utcnow()
-            #     db.commit()
-
-            if g_row:
-                if max_updated_str and not scoped_urls:
-                    g_row.last_synced_updated = max_updated_str
-                g_row.last_synced_at = datetime.utcnow()
+                seen, linked, doc_flags, doc_codes = upsert_annotations_bulk(
+                    db,
+                    extracted,
+                    url_to_doc,
+                    source_type=source_type,
+                    workspace_user_id=workspace_user_id,
+                )
                 db.commit()
+                updated_docs = solr_update_flags_for_docs(payload.core, doc_flags, doc_codes=doc_codes)
 
-            totals["groups_synced"] += 1
-            totals["annotations_seen"] += seen
-            totals["annotations_linked_to_docs"] += linked
-            totals["docs_flagged_in_solr"] += updated_docs
+                _emit("codes_summary", {
+                    "group_id": gid,
+                    "docs_with_codes": len(doc_codes),
+                    "docs_with_flags": len(doc_flags),
+                    "sample_doc_id": next(iter(doc_codes.keys()), None),
+                    "sample_codes_all_count": (len(next(iter(doc_codes.values()))["all"]) if doc_codes else 0),
+                })
 
-            # Progress: group done (this is what moves the bar)
-            _emit("progress", {
-                "phase": "group_done",
-                "group_id": gid,
-                "group_i": gi,
-                "groups_total": groups_total,
-                "groups_done": totals["groups_synced"],
-                "annotations_seen": totals["annotations_seen"],
-                "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
-                "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
-            })
+                if g_row:
+                    if max_updated_str and not scoped_urls:
+                        g_row.last_synced_updated = max_updated_str
+                    g_row.last_synced_at = datetime.utcnow()
+                    db.commit()
 
-            _emit("group_done", {
-                "group_id": gid,
-                "group_role": group_role,
-                "source_type": source_type,
-                "annotations_seen": seen,
-                "linked": linked,
-                "docs_flagged": updated_docs,
-                "new_cursor": (g_row.last_synced_updated if g_row else None),
-            })
-            release_hypothesis_group_sync_lock(db, gid, sync_owner)
+                totals["groups_synced"] += 1
+                totals["annotations_seen"] += seen
+                totals["annotations_linked_to_docs"] += linked
+                totals["docs_flagged_in_solr"] += updated_docs
+
+                # Progress: group done (this is what moves the bar)
+                _emit("progress", {
+                    "phase": "group_done",
+                    "group_id": gid,
+                    "group_i": gi,
+                    "groups_total": groups_total,
+                    "groups_done": totals["groups_synced"],
+                    "annotations_seen": totals["annotations_seen"],
+                    "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                    "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+                })
+
+                _emit("group_done", {
+                    "group_id": gid,
+                    "group_role": group_role,
+                    "source_type": source_type,
+                    "annotations_seen": seen,
+                    "linked": linked,
+                    "docs_flagged": updated_docs,
+                    "new_cursor": (g_row.last_synced_updated if g_row else None),
+                })
+            finally:
+                if lock_acquired:
+                    release_hypothesis_group_sync_lock(db, gid, sync_owner)
 
         _emit("done", totals)
         return {
