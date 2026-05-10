@@ -1938,6 +1938,16 @@ def delete_project(project_id: UUID, request: Request, core: str = SOLR_GLOBAL_C
         )
 
         db.execute(
+            text("DELETE FROM project_hypothesis_reviewers WHERE project_id = :pid"),
+            {"pid": str(project_id)},
+        )
+
+        db.execute(
+            text("DELETE FROM project_hypothesis_review_groups WHERE project_id = :pid"),
+            {"pid": str(project_id)},
+        )
+
+        db.execute(
             text("DELETE FROM project_documents WHERE project_id = :pid"),
             {"pid": str(project_id)},
         )
