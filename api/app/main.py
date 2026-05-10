@@ -6703,7 +6703,7 @@ class ProjectReviewGroupSetIn(BaseModel):
 class ProjectHypothesisReviewerIn(BaseModel):
     project_id: UUID
     hypothesis_user: str
-    status: str = "active"
+    status: str = "pending"
 
 
 def normalize_hypothesis_group_ref(value: str | None) -> str:
@@ -6756,10 +6756,10 @@ def project_review_user_allowed(db, project_id: UUID | None, hypothesis_user: st
         return False
 
     row = db.get(ProjectHypothesisReviewer, {"project_id": project_id, "hypothesis_user": normalized})
-    if row and row.status == "blocked":
-        return False
     if row and row.status == "active":
         return True
+    if row:
+        return False
 
     active_count = db.execute(
         select(func.count())
@@ -6880,11 +6880,13 @@ def list_project_hypothesis_reviewers(project_id: UUID, request: Request):
             db.execute(
                 select(ProjectHypothesisReviewer)
                 .where(ProjectHypothesisReviewer.project_id == project_id)
-                .order_by(ProjectHypothesisReviewer.status.asc(), ProjectHypothesisReviewer.hypothesis_user.asc())
+                .order_by(ProjectHypothesisReviewer.hypothesis_user.asc())
             )
             .scalars()
             .all()
         )
+        status_order = {"pending": 0, "active": 1, "blocked": 2}
+        rows = sorted(rows, key=lambda r: (status_order.get((r.status or "").lower(), 9), r.hypothesis_user))
         return {
             "ok": True,
             "project_id": str(project_id),
@@ -6907,18 +6909,30 @@ def list_project_hypothesis_reviewers(project_id: UUID, request: Request):
 def upsert_project_hypothesis_reviewer(payload: ProjectHypothesisReviewerIn, request: Request):
     user = get_current_user(request)
     uid = current_user_id(request)
-    status = (payload.status or "active").strip().lower()
-    if status not in {"active", "blocked"}:
-        raise HTTPException(400, "status must be active|blocked")
+    status = (payload.status or "pending").strip().lower()
+    if status not in {"pending", "active", "blocked"}:
+        raise HTTPException(400, "status must be pending|active|blocked")
     hyp_user = normalize_hypothesis_user(payload.hypothesis_user)
     if not hyp_user:
         raise HTTPException(400, "hypothesis_user is required")
 
     db = SessionLocal()
     try:
-        assert_admin_user(request)
         assert_project_member_or_admin(db, payload.project_id, uid, request)
+        is_admin = (user.get("role") or "").lower() == "admin"
+        if status in {"active", "blocked"} and not is_admin:
+            raise HTTPException(403, "Only admins can approve or block Hypothesis reviewers")
         row = db.get(ProjectHypothesisReviewer, {"project_id": payload.project_id, "hypothesis_user": hyp_user})
+        if row and not is_admin:
+            if row.status == "blocked":
+                raise HTTPException(403, "This Hypothesis reviewer is blocked for this project")
+            return {
+                "ok": True,
+                "project_id": str(payload.project_id),
+                "hypothesis_user": hyp_user,
+                "status": row.status,
+                "added_by": row.added_by,
+            }
         if row:
             row.status = status
             row.added_by = row.added_by or uid

@@ -1813,7 +1813,8 @@ async def ui_hypothesis_reviewers_save(
             "status": status,
         },
     )
-    msg = urllib.parse.quote("Reviewer list updated")
+    msg_text = "Review access request submitted" if (status or "").strip().lower() == "pending" else "Reviewer list updated"
+    msg = urllib.parse.quote(msg_text)
     return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
 
 

@@ -83,8 +83,8 @@
     </div>
   {% endif %}
   <p class="muted">
-    After reviewers join, add their Hypothesis username to the approved reviewer list
-    in the review group settings so their annotations are imported during sync.
+    After reviewers join, they should request review access with their Hypothesis username.
+    Admins approve requests in the review group settings before annotations are imported during sync.
   </p>
   <p class="muted">
     Reviewers can find their Hypothesis username in their Hypothesis account/profile. They only need to provide
@@ -97,6 +97,9 @@
       Create Separate Private Group
     </a>
   {% endif %}
+  <a class="btnlink" href="{{ workspace_settings_url }}">
+    Request / Manage Review Access
+  </a>
 </div>
 
 <div class="card" style="border-left:4px solid #0ea5e9; background:#f0f9ff;">

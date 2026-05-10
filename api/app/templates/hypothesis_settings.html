@@ -87,10 +87,10 @@
 </div>
 
 <div class="card">
-  <h3>Approved reviewers</h3>
+  <h3>Reviewer access</h3>
   <p class="muted">
-    Share the Hypothesis invite link with reviewers. After they join, add their Hypothesis username here.
-    Human annotations from unapproved or blocked Hypothesis accounts are ignored during sync.
+    Reviewers join the Hypothesis review group, then request review access here with their Hypothesis username.
+    Human annotations from pending, unapproved, or blocked Hypothesis accounts are ignored during sync.
   </p>
   <p class="muted">
     Reviewers can find their Hypothesis username in their Hypothesis account/profile. They only need to give you
@@ -101,17 +101,27 @@
   {% if is_review_manager %}
     <form method="post" action="/ui/settings/hypothesis/reviewers" class="row" style="margin-top:12px;">
       <div class="grow">
-        <label class="muted">Hypothesis username</label>
+        <label class="muted">Add or update reviewer</label>
         <input name="hypothesis_user" placeholder="username or acct:username@hypothes.is">
       </div>
       <div class="small">
         <label class="muted">Status</label>
         <select name="status">
           <option value="active">active</option>
+          <option value="pending">pending</option>
           <option value="blocked">blocked</option>
         </select>
       </div>
       <button type="submit" class="btnlink">Save Reviewer</button>
+    </form>
+  {% else %}
+    <form method="post" action="/ui/settings/hypothesis/reviewers" class="row" style="margin-top:12px;">
+      <div class="grow">
+        <label class="muted">Your Hypothesis username</label>
+        <input name="hypothesis_user" placeholder="username or acct:username@hypothes.is">
+      </div>
+      <input type="hidden" name="status" value="pending">
+      <button type="submit" class="btnlink">Request Review Access</button>
     </form>
   {% endif %}
 
@@ -131,11 +141,32 @@
             <td>{{ r.status }}</td>
             <td>
               {% if is_review_manager %}
-                <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
-                  <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
-                  <input type="hidden" name="status" value="{{ 'active' if r.status == 'blocked' else 'blocked' }}">
-                  <button type="submit" class="btnlink">{{ 'Allow' if r.status == 'blocked' else 'Block' }}</button>
-                </form>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  {% if r.status == "pending" %}
+                    <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                      <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
+                      <input type="hidden" name="status" value="active">
+                      <button type="submit" class="btnlink">Approve</button>
+                    </form>
+                    <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                      <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
+                      <input type="hidden" name="status" value="blocked">
+                      <button type="submit" class="btnlink">Block</button>
+                    </form>
+                  {% elif r.status == "blocked" %}
+                    <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                      <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
+                      <input type="hidden" name="status" value="active">
+                      <button type="submit" class="btnlink">Allow</button>
+                    </form>
+                  {% else %}
+                    <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                      <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
+                      <input type="hidden" name="status" value="blocked">
+                      <button type="submit" class="btnlink">Block</button>
+                    </form>
+                  {% endif %}
+                </div>
               {% else %}
                 <span class="muted">Managed by admin</span>
               {% endif %}
@@ -146,8 +177,8 @@
     </table>
   {% else %}
     <div class="alert" style="margin-top:12px;">
-      No approved reviewers yet. Copied suggestions will sync, but human review annotations from this shared group
-      will not be imported until at least one reviewer is approved.
+      No reviewer requests yet. Copied suggestions will sync, but human review annotations from this shared group
+      will not be imported until a reviewer is approved.
     </div>
   {% endif %}
 </div>
