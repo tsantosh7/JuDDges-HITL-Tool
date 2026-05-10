@@ -14,7 +14,7 @@ import hashlib
 import threading
 import urllib.parse
 
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 from typing import Any, Dict, List, Optional, Iterable, Tuple
 import httpx
 
@@ -131,6 +131,84 @@ HYPOTHESIS_PUBLIC_GROUP_ID = "__world__"
 HYPOTHESIS_EXCLUDE_PUBLIC = os.getenv("HYPOTHESIS_EXCLUDE_PUBLIC", "true").lower() == "true"
 
 
+def _env_group_ids(*names: str) -> set[str]:
+    ids: set[str] = set()
+    for name in names:
+        raw = (os.getenv(name) or "").strip()
+        if raw:
+            ids.add(raw)
+    return ids
+
+
+def infer_hypothesis_group_role(group_id: str | None) -> str:
+    gid = (group_id or "").strip()
+    if not gid:
+        return "unknown"
+    if gid == HYPOTHESIS_PUBLIC_GROUP_ID:
+        return "public"
+    model_ids = _env_group_ids("HYP_GROUP_MODEL", "HYPOTHESIS_MODEL_GROUP_ID")
+    model_ids.add("BXp1QL5v")
+    gold_ids = _env_group_ids("HYP_GROUP_GOLD", "HYPOTHESIS_GOLD_GROUP_ID")
+    gold_ids.add("K48VWwNg")
+    if gid in model_ids:
+        return "model"
+    if gid in gold_ids:
+        return "gold"
+    if gid in _env_group_ids("HYP_GROUP_SUGGESTIONS", "HYPOTHESIS_SUGGESTION_GROUP_ID"):
+        return "model_suggestion"
+    return "human_workspace"
+
+
+def source_type_for_group_role(group_role: str | None) -> str:
+    role = (group_role or "unknown").strip()
+    if role in {"model", "gold", "model_suggestion", "human_workspace"}:
+        return role if role != "human_workspace" else "human"
+    return "unknown"
+
+
+def is_human_export_source(source_type: str | None) -> bool:
+    return (source_type or "").strip() in {"human", "gold"}
+
+
+def seed_hypothesis_group_roles(db) -> None:
+    role_exportable = {
+        "model": False,
+        "gold": True,
+        "model_suggestion": False,
+        "public": False,
+    }
+    known_ids = set()
+    known_ids.update(_env_group_ids("HYP_GROUP_MODEL", "HYPOTHESIS_MODEL_GROUP_ID"))
+    known_ids.add("BXp1QL5v")
+    known_ids.update(_env_group_ids("HYP_GROUP_GOLD", "HYPOTHESIS_GOLD_GROUP_ID"))
+    known_ids.add("K48VWwNg")
+    known_ids.update(_env_group_ids("HYP_GROUP_SUGGESTIONS", "HYPOTHESIS_SUGGESTION_GROUP_ID"))
+    known_ids.add(HYPOTHESIS_PUBLIC_GROUP_ID)
+
+    for gid in known_ids:
+        if not gid:
+            continue
+        row = db.get(HypothesisGroup, gid)
+        if not row:
+            continue
+        role = infer_hypothesis_group_role(gid)
+        row.group_role = role
+        row.is_exportable = role_exportable.get(role, True)
+        if role == "public":
+            row.is_enabled = False
+
+    for user_id, group_id in db.execute(select(UserHypothesisWorkspace.user_id, UserHypothesisWorkspace.group_id)).all():
+        row = db.get(HypothesisGroup, group_id)
+        if not row:
+            continue
+        if row.group_role in {None, "", "unknown", "human_workspace"}:
+            row.group_role = "human_workspace"
+            row.owner_user_id = row.owner_user_id or str(user_id)
+            row.is_exportable = True
+
+    db.commit()
+
+
 # import httpx
 
 
@@ -152,6 +230,7 @@ async def app_startup():
     try:
         seed_v1_codes(db)
         seed_code_aliases(db)
+        seed_hypothesis_group_roles(db)
     finally:
         db.close()
 
@@ -2051,6 +2130,8 @@ def upsert_group(db, g: dict) -> HypothesisGroup:
 
     is_public = (gid == HYPOTHESIS_PUBLIC_GROUP_ID) or bool(g.get("public"))
     default_enabled = (not is_public)
+    inferred_role = infer_hypothesis_group_role(gid)
+    default_exportable = inferred_role in {"human_workspace", "gold"}
 
     row = db.get(HypothesisGroup, gid)
     if not row:
@@ -2060,6 +2141,8 @@ def upsert_group(db, g: dict) -> HypothesisGroup:
             organization=org,
             scopes=scopes,
             is_enabled=default_enabled,
+            group_role=inferred_role,
+            is_exportable=default_exportable,
         )
         # Hard-disable __world__ on insert if exclude is on
         if HYPOTHESIS_EXCLUDE_PUBLIC and gid == HYPOTHESIS_PUBLIC_GROUP_ID:
@@ -2078,6 +2161,10 @@ def upsert_group(db, g: dict) -> HypothesisGroup:
     row.name = name or row.name
     row.organization = org
     row.scopes = scopes
+    if not getattr(row, "group_role", None) or row.group_role == "unknown":
+        row.group_role = inferred_role
+    if row.group_role in {"model", "model_suggestion", "public"}:
+        row.is_exportable = False
 
     # Don't auto-enable previously disabled groups.
     # If nullable and currently unset, set default.
@@ -2120,6 +2207,12 @@ def upsert_annotations_bulk(
     db,
     fields_list: List[dict],
     url_to_doc: Dict[str, str],
+    *,
+    source_type: str = "human",
+    workspace_user_id: Optional[str] = None,
+    annotation_status: str = "synced",
+    codebook_version: str = "v1",
+    model_run_id: Optional[str] = None,
 ) -> Tuple[int, int, Dict[str, Dict[str, bool]], Dict[str, Dict[str, set[str]]]]:
     """
     Upsert annotations. Returns:
@@ -2163,6 +2256,12 @@ def upsert_annotations_bulk(
                 row.prefix = fields.get("prefix")
                 row.suffix = fields.get("suffix")
                 row.raw = fields.get("raw") or {}
+
+            row.source_type = source_type
+            row.workspace_user_id = workspace_user_id
+            row.annotation_status = annotation_status
+            row.codebook_version = codebook_version
+            row.model_run_id = model_run_id
         else:
             row = HypothesisAnnotation(
                 annotation_id=ann_id,
@@ -2178,11 +2277,19 @@ def upsert_annotations_bulk(
                 prefix=fields.get("prefix"),
                 suffix=fields.get("suffix"),
                 raw=fields.get("raw") or {},
+                source_type=source_type,
+                workspace_user_id=workspace_user_id,
+                annotation_status=annotation_status,
+                codebook_version=codebook_version,
+                model_run_id=model_run_id,
             )
             db.add(row)
 
         if doc_id:
             linked += 1
+
+            if not is_human_export_source(source_type):
+                continue
 
             # Flags
             if doc_id not in doc_flags:
@@ -2242,6 +2349,41 @@ def solr_update_flags_for_docs(
         updated += len(batch)
 
     return updated
+
+
+def acquire_hypothesis_group_sync_lock(db, group_id: str, owner: str, ttl_minutes: int = 20) -> bool:
+    locked_until = datetime.utcnow() + timedelta(minutes=ttl_minutes)
+    row = db.execute(
+        text(
+            """
+            UPDATE hypothesis_groups
+            SET sync_locked_by = :owner,
+                sync_locked_until = :locked_until
+            WHERE group_id = :group_id
+              AND (sync_locked_until IS NULL OR sync_locked_until < NOW())
+            RETURNING group_id
+            """
+        ),
+        {"group_id": group_id, "owner": owner, "locked_until": locked_until},
+    ).first()
+    db.commit()
+    return row is not None
+
+
+def release_hypothesis_group_sync_lock(db, group_id: str, owner: str) -> None:
+    db.execute(
+        text(
+            """
+            UPDATE hypothesis_groups
+            SET sync_locked_by = NULL,
+                sync_locked_until = NULL
+            WHERE group_id = :group_id
+              AND sync_locked_by = :owner
+            """
+        ),
+        {"group_id": group_id, "owner": owner},
+    )
+    db.commit()
 
 
 
@@ -2314,10 +2456,12 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
         totals = {
             "groups_synced": 0,
+            "groups_skipped_locked": 0,
             "annotations_seen": 0,
             "annotations_linked_to_docs": 0,
             "docs_flagged_in_solr": 0,
         }
+        sync_owner = f"sync-{uuid.uuid4()}"
 
         # Initial progress event (good for initializing a progress bar)
         _emit("progress", {
@@ -2331,16 +2475,44 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
         for gi, gid in enumerate(group_ids, start=1):
             g_row = db.get(HypothesisGroup, gid)
+            if not acquire_hypothesis_group_sync_lock(db, gid, sync_owner):
+                totals["groups_skipped_locked"] += 1
+                _emit("group_skipped", {"group_id": gid, "reason": "sync_locked"})
+                continue
+
+            g_row = db.get(HypothesisGroup, gid)
+            group_role = getattr(g_row, "group_role", None) or infer_hypothesis_group_role(gid)
+            source_type = source_type_for_group_role(group_role)
+            workspace_user_id = None
+            if group_role == "human_workspace":
+                workspace_user_id = (
+                    db.execute(
+                        select(UserHypothesisWorkspace.user_id)
+                        .where(UserHypothesisWorkspace.group_id == gid)
+                        .limit(1)
+                    )
+                    .scalars()
+                    .first()
+                )
             cursor = None
             if g_row and not payload.force_full:
                 cursor = g_row.last_synced_updated
 
-            _emit("group_start", {"group_id": gid, "i": gi, "n": groups_total, "cursor": cursor})
+            _emit("group_start", {
+                "group_id": gid,
+                "group_role": group_role,
+                "source_type": source_type,
+                "i": gi,
+                "n": groups_total,
+                "cursor": cursor,
+            })
 
             # Progress: group start
             _emit("progress", {
                 "phase": "group_start",
                 "group_id": gid,
+                "group_role": group_role,
+                "source_type": source_type,
                 "group_i": gi,
                 "groups_total": groups_total,
                 "groups_done": totals["groups_synced"],
@@ -2401,7 +2573,13 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
             url_to_doc = bulk_resolve_document_ids(db, urls_unique)
             _emit("resolved", {"group_id": gid, "matched_docs": len(set(url_to_doc.values()))})
 
-            seen, linked, doc_flags, doc_codes = upsert_annotations_bulk(db, extracted, url_to_doc)
+            seen, linked, doc_flags, doc_codes = upsert_annotations_bulk(
+                db,
+                extracted,
+                url_to_doc,
+                source_type=source_type,
+                workspace_user_id=workspace_user_id,
+            )
             db.commit()
             updated_docs = solr_update_flags_for_docs(payload.core, doc_flags, doc_codes=doc_codes)
 
@@ -2442,11 +2620,14 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
             _emit("group_done", {
                 "group_id": gid,
+                "group_role": group_role,
+                "source_type": source_type,
                 "annotations_seen": seen,
                 "linked": linked,
                 "docs_flagged": updated_docs,
                 "new_cursor": (g_row.last_synced_updated if g_row else None),
             })
+            release_hypothesis_group_sync_lock(db, gid, sync_owner)
 
         _emit("done", totals)
         return {
@@ -2509,7 +2690,12 @@ def hypothesis_sync_stream(payload: HypothesisSyncRequest):
 # curl -sS -X POST "http://localhost:8000/solr/recompute_codes?core=hitl_test&group_id=Qb9zgyQY"
 
 @app.post("/solr/recompute_codes")
-def recompute_solr_codes(core: str = "hitl_test", project_id: Optional[UUID] = None, group_id: Optional[str] = None):
+def recompute_solr_codes(
+    core: str = "hitl_test",
+    project_id: Optional[UUID] = None,
+    group_id: Optional[str] = None,
+    source: str = "human",
+):
     """
     Recompute Solr codes_* purely from Postgres hypothesis_annotations.
     No Hypothesis API calls.
@@ -2518,6 +2704,9 @@ def recompute_solr_codes(core: str = "hitl_test", project_id: Optional[UUID] = N
       - project_id: only docs in that project
       - group_id: only annotations from that Hypothesis group
     """
+    if source not in {"human", "gold", "all"}:
+        raise HTTPException(400, "source must be human|gold|all")
+
     db = SessionLocal()
     try:
         # load code maps once
@@ -2530,10 +2719,22 @@ def recompute_solr_codes(core: str = "hitl_test", project_id: Optional[UUID] = N
                 db.execute(select(ProjectDocument.document_id).where(ProjectDocument.project_id == project_id)).scalars().all()
             )
 
-        stmt = select(
-            HypothesisAnnotation.document_id,
-            HypothesisAnnotation.tags,
-        ).where(HypothesisAnnotation.document_id.is_not(None))
+        stmt = (
+            select(
+                HypothesisAnnotation.document_id,
+                HypothesisAnnotation.tags,
+            )
+            .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
+            .where(HypothesisAnnotation.document_id.is_not(None))
+            .where(HypothesisGroup.is_exportable == True)
+        )
+
+        if source == "human":
+            stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+        elif source == "gold":
+            stmt = stmt.where(HypothesisGroup.group_role == "gold")
+        else:
+            stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
 
         if group_id:
             stmt = stmt.where(HypothesisAnnotation.group_id == group_id)
@@ -2578,6 +2779,7 @@ def recompute_solr_codes(core: str = "hitl_test", project_id: Optional[UUID] = N
             "core": core,
             "project_id": str(project_id) if project_id else None,
             "group_id": group_id,
+            "source": source,
             "annotation_rows_scanned": scanned,
             "docs_with_codes": len(doc_codes),
             "docs_updated_in_solr": updated,
@@ -2832,6 +3034,7 @@ def build_wide_aggregates(
     *,
     version: str = "all",
     code_filter: Optional[str] = None,
+    source_filter: str = "human",
 ) -> tuple[dict[str, dict[str, dict]], set[str]]:
     """
     Build per-doc aggregates and the set of codes seen, for /export/csv_wide.
@@ -2843,12 +3046,24 @@ def build_wide_aggregates(
     per_doc: dict[str, dict[str, dict]] = {}
     codes_seen: set[str] = set()
 
-    stmt = select(
-        HypothesisAnnotation.document_id,
-        HypothesisAnnotation.tags,
-        HypothesisAnnotation.text,
-        HypothesisAnnotation.updated,
-    ).where(HypothesisAnnotation.document_id.in_(doc_ids))
+    stmt = (
+        select(
+            HypothesisAnnotation.document_id,
+            HypothesisAnnotation.tags,
+            HypothesisAnnotation.text,
+            HypothesisAnnotation.updated,
+        )
+        .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
+        .where(HypothesisAnnotation.document_id.in_(doc_ids))
+        .where(HypothesisGroup.is_exportable == True)
+    )
+
+    if source_filter == "human":
+        stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+    elif source_filter == "gold":
+        stmt = stmt.where(HypothesisGroup.group_role == "gold")
+    else:
+        stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
 
     for doc_id, tags, text, updated in db.execute(stmt).yield_per(5000):
         if not doc_id:
@@ -3010,8 +3225,8 @@ def export_csv(
     source: str = "all",
     include_annotators: bool = False,
 ):
-    if source not in {"human", "model", "all"}:
-        raise HTTPException(400, "source must be human|model|all")
+    if source not in {"human", "gold", "model", "all"}:
+        raise HTTPException(400, "source must be human|gold|model|all")
     if version not in {"v1", "ext", "all"}:
         raise HTTPException(400, "version must be v1|ext|all")
 
@@ -3065,19 +3280,32 @@ def export_csv(
             # -------------------------
             # Human aggregates
             # -------------------------
-            human_agg: dict[tuple[str, str], dict] = {}
+            human_agg: dict[tuple[str, str, str], dict] = {}
 
-            if source in {"human", "all"}:
-                stmt = select(
-                    HypothesisAnnotation.document_id,
-                    HypothesisAnnotation.tags,
-                    HypothesisAnnotation.text,
-                    HypothesisAnnotation.exact,
-                    HypothesisAnnotation.user,
-                    HypothesisAnnotation.updated,
-                ).where(HypothesisAnnotation.document_id.in_(doc_ids))
+            if source in {"human", "gold", "all"}:
+                stmt = (
+                    select(
+                        HypothesisAnnotation.document_id,
+                        HypothesisAnnotation.tags,
+                        HypothesisAnnotation.text,
+                        HypothesisAnnotation.exact,
+                        HypothesisAnnotation.user,
+                        HypothesisAnnotation.updated,
+                        HypothesisGroup.group_role,
+                    )
+                    .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisAnnotation.group_id)
+                    .where(HypothesisAnnotation.document_id.in_(doc_ids))
+                    .where(HypothesisGroup.is_exportable == True)
+                )
 
-                for doc_id, tags, text, exact, user_, updated in db.execute(stmt).yield_per(5000):
+                if source == "human":
+                    stmt = stmt.where(HypothesisGroup.group_role == "human_workspace")
+                elif source == "gold":
+                    stmt = stmt.where(HypothesisGroup.group_role == "gold")
+                else:
+                    stmt = stmt.where(HypothesisGroup.group_role.in_(["human_workspace", "gold"]))
+
+                for doc_id, tags, text, exact, user_, updated, group_role in db.execute(stmt).yield_per(5000):
                     if not doc_id:
                         continue
 
@@ -3095,10 +3323,12 @@ def export_csv(
                         if version != "all" and code_ver != version:
                             continue
 
-                        key = (doc_id, canonical_code)
+                        source_label = "gold" if group_role == "gold" else "human"
+                        key = (doc_id, canonical_code, source_label)
                         rec = human_agg.get(key)
                         if not rec:
                             rec = {
+                                "source": source_label,
                                 "code_version": code_ver,
                                 "n_annotations": 0,
                                 "has_span": False,
@@ -3148,9 +3378,9 @@ def export_csv(
             # -------------------------
             # Emit human rows
             # -------------------------
-            if source in {"human", "all"}:
-                for (doc_id, canonical_code) in sorted(human_agg.keys()):
-                    rec = human_agg[(doc_id, canonical_code)]
+            if source in {"human", "gold", "all"}:
+                for (doc_id, canonical_code, source_label) in sorted(human_agg.keys()):
+                    rec = human_agg[(doc_id, canonical_code, source_label)]
                     values_list = sorted(list(rec["values_set"]))
 
                     row = {
@@ -3159,7 +3389,7 @@ def export_csv(
                         "canonical_url": doc_url.get(doc_id) or "",
                         "code": canonical_code,
                         "code_version": rec["code_version"],
-                        "source": "human",
+                        "source": rec["source"],
                         "value": rec["latest_value"] or "",
                         "value_mode": "latest_nonempty_text",
                         "values": json.dumps(values_list, ensure_ascii=False),
@@ -3233,8 +3463,8 @@ def export_csv_wide(
 ):
     if version not in {"v1", "ext", "all"}:
         raise HTTPException(400, "version must be v1|ext|all")
-    if source not in {"human", "model", "all"}:
-        raise HTTPException(400, "source must be human|model|all")
+    if source not in {"human", "gold", "model", "all"}:
+        raise HTTPException(400, "source must be human|gold|model|all")
     if metric not in {"value", "count", "binary"}:
         raise HTTPException(400, "metric must be value|count|binary")
 
@@ -3275,9 +3505,11 @@ def export_csv_wide(
             cf = resolve_tag_to_canonical(code, canon_version, alias_to_canon, key_to_canon)
             code_filter = cf or "__NO_MATCH__"
 
-        # Human aggregates
+        # Human/gold aggregates
         per_doc: dict[str, dict[str, dict]] = {}
         codes_seen: set[str] = set()
+        gold_per_doc: dict[str, dict[str, dict]] = {}
+        gold_codes_seen: set[str] = set()
 
         if source in {"human", "all"} and code_filter != "__NO_MATCH__":
             per_doc, codes_seen = build_wide_aggregates(
@@ -3288,10 +3520,24 @@ def export_csv_wide(
                 key_to_canon,
                 version=version,
                 code_filter=(None if code_filter is None else code_filter),
+                source_filter="human",
+            )
+
+        if source in {"gold", "all"} and code_filter != "__NO_MATCH__":
+            gold_per_doc, gold_codes_seen = build_wide_aggregates(
+                db,
+                doc_ids,
+                canon_version,
+                alias_to_canon,
+                key_to_canon,
+                version=version,
+                code_filter=(None if code_filter is None else code_filter),
+                source_filter="gold",
             )
 
         if code_filter == "__NO_MATCH__":
             codes_seen = set()
+            gold_codes_seen = set()
 
         # Model aggregates
         model_per_doc: dict[str, dict[str, dict]] = {}
@@ -3316,10 +3562,13 @@ def export_csv_wide(
 
         if source == "human":
             code_cols = [csv_safe_col(c) for c in codes_sorted]
+        elif source == "gold":
+            code_cols = [csv_safe_col(c) for c in sorted(list(gold_codes_seen))]
         elif source == "model":
             code_cols = [csv_safe_col(c) for c in model_codes_sorted]
         else:
             code_cols = sorted([f"{csv_safe_col(c)}__human" for c in codes_sorted]) + \
+                        sorted([f"{csv_safe_col(c)}__gold" for c in gold_codes_seen]) + \
                         sorted([f"{csv_safe_col(c)}__model" for c in model_codes_sorted])
 
         headers = base_cols + code_cols
@@ -3355,6 +3604,20 @@ def export_csv_wide(
                         else:
                             row[col] = 1
 
+                elif source == "gold":
+                    gold_bucket = gold_per_doc.get(doc_id_, {})
+                    for canonical_code in sorted(list(gold_codes_seen)):
+                        col = csv_safe_col(canonical_code)
+                        rec = gold_bucket.get(canonical_code)
+                        if not rec:
+                            row[col] = "" if metric == "value" else 0
+                        elif metric == "value":
+                            row[col] = rec.get("latest_value") or ""
+                        elif metric == "count":
+                            row[col] = rec.get("count", 0)
+                        else:
+                            row[col] = 1
+
                 elif source == "model":
                     for canonical_code in model_codes_sorted:
                         col = csv_safe_col(canonical_code)
@@ -3369,9 +3632,22 @@ def export_csv_wide(
                             row[col] = 1
 
                 else:  # source == "all"
+                    gold_bucket = gold_per_doc.get(doc_id_, {})
                     for canonical_code in codes_sorted:
                         col = f"{csv_safe_col(canonical_code)}__human"
                         rec = human_bucket.get(canonical_code)
+                        if not rec:
+                            row[col] = "" if metric == "value" else 0
+                        elif metric == "value":
+                            row[col] = rec.get("latest_value") or ""
+                        elif metric == "count":
+                            row[col] = rec.get("count", 0)
+                        else:
+                            row[col] = 1
+
+                    for canonical_code in sorted(list(gold_codes_seen)):
+                        col = f"{csv_safe_col(canonical_code)}__gold"
+                        rec = gold_bucket.get(canonical_code)
                         if not rec:
                             row[col] = "" if metric == "value" else 0
                         elif metric == "value":
@@ -4145,6 +4421,15 @@ def list_hypothesis_groups():
                     "name": name,
                     "is_public": bool(is_public),
                     "is_enabled": bool(getattr(g, "is_enabled", True)),
+                    "group_role": getattr(g, "group_role", None) or "unknown",
+                    "owner_user_id": getattr(g, "owner_user_id", None),
+                    "is_exportable": bool(getattr(g, "is_exportable", True)),
+                    "last_synced_at": (
+                        g.last_synced_at.isoformat() if getattr(g, "last_synced_at", None) else None
+                    ),
+                    "sync_locked_until": (
+                        g.sync_locked_until.isoformat() if getattr(g, "sync_locked_until", None) else None
+                    ),
                 }
             )
 
@@ -5654,6 +5939,9 @@ def set_my_hypothesis_workspace(payload: WorkspaceSetIn, request: Request):
                 name=(payload.group_name or f"Personal workspace ({gid})").strip(),
                 scopes=[],
                 is_enabled=False,
+                group_role="human_workspace",
+                owner_user_id=uid,
+                is_exportable=True,
             )
             db.add(g)
         elif payload.group_name and not g.name:

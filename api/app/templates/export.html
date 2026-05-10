@@ -16,9 +16,10 @@
 
     <label class="muted">Coding source</label>
     <select name="source">
-      <option value="human" {% if source == "human" %}selected{% endif %}>Human only</option>
+      <option value="human" {% if source == "human" %}selected{% endif %}>Human workspace only</option>
+      <option value="gold" {% if source == "gold" %}selected{% endif %}>Gold only</option>
       <option value="model" {% if source == "model" %}selected{% endif %}>AI only</option>
-      <option value="all" {% if source == "all" %}selected{% endif %}>All coding sources</option>
+      <option value="all" {% if source == "all" %}selected{% endif %}>Human + gold + AI</option>
     </select>
 
     <label class="muted">Code (optional)</label>
@@ -68,6 +69,6 @@
 
 <div class="muted" style="margin-top:12px;">
   Long CSV = one row per (document, code). Wide CSV = one row per document with codes as columns.
-  The column order selector changes the first three wide-export columns; code columns remain alphabetical for consistency, and when exporting all coding sources, human and AI columns are shown separately.
+  The column order selector changes the first three wide-export columns; code columns remain alphabetical for consistency, and when exporting all coding sources, human, gold, and AI columns are shown separately.
 </div>
 {% endblock %}

@@ -1083,7 +1083,7 @@ async def ui_export_page(
     request: Request,
     project_id: Optional[UUID] = None,
     version: str = "all",
-    source: str = "all",
+    source: str = "human",
     code: Optional[str] = None,
     include_annotators: Optional[str] = None,
     metric: str = "value",
@@ -1446,6 +1446,8 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
                 "group_id": WORK_GID,
                 "name": (g.name if g else "") or WORK_GID,
                 "is_enabled": bool(g.is_enabled) if g else False,
+                "group_role": (g.group_role if g else "") or "human_workspace",
+                "last_synced_at": g.last_synced_at.isoformat() if g and g.last_synced_at else "",
             }
             ann_rows = (
                 db.execute(
@@ -1750,6 +1752,8 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
                 "group_id": current_gid,
                 "name": (g.name if g else "") or current_gid,
                 "is_enabled": bool(g.is_enabled) if g else False,
+                "group_role": (g.group_role if g else "") or "human_workspace",
+                "last_synced_at": g.last_synced_at.isoformat() if g and g.last_synced_at else "",
             }
             groups.insert(0, current_group)
         finally:
@@ -1813,6 +1817,9 @@ async def ui_hypothesis_settings_save(
                 name=f"Personal workspace ({gid})",
                 scopes=[],
                 is_enabled=False,
+                group_role="human_workspace",
+                owner_user_id=str(uid),
+                is_exportable=True,
             )
             db.add(group)
 
@@ -1827,6 +1834,49 @@ async def ui_hypothesis_settings_save(
         db.close()
 
     return RedirectResponse("/ui/settings/hypothesis?msg=saved", status_code=303)
+
+
+@router.post("/hypothesis/sync_workspace")
+async def ui_hypothesis_sync_workspace(
+    request: Request,
+    user=Depends(require_paid_user),
+):
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    if not uid:
+        raise HTTPException(401, "Not authenticated")
+
+    db = SessionLocal()
+    try:
+        row = db.get(UserHypothesisWorkspace, str(uid))
+        if not row or not row.group_id:
+            return RedirectResponse(
+                "/ui/settings/hypothesis?msg=Set%20your%20Hypothesis%20workspace%20first",
+                status_code=303,
+            )
+        group_id = row.group_id
+    finally:
+        db.close()
+
+    core = (request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip() or "hitl_test"
+    res = await asgi_post_json(
+        request,
+        "/hypothesis/sync",
+        {
+            "core": core,
+            "group_id": group_id,
+            "all_groups": False,
+            "only_enabled_groups": False,
+            "write_snapshot": True,
+            "limit_per_request": 200,
+            "force_full": False,
+            "include_public": False,
+        },
+        timeout_s=300.0,
+    )
+    seen = int(res.get("annotations_seen") or 0)
+    linked = int(res.get("annotations_linked_to_docs") or 0)
+    msg = urllib.parse.quote(f"Synced workspace: {seen} annotations seen, {linked} linked")
+    return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
 
 
 @router.get("/hypothesis/access", response_class=HTMLResponse)

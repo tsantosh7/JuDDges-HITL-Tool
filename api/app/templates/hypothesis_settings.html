@@ -18,6 +18,9 @@
       Current workspace:
       <strong>{{ (current_group.name if current_group else current_gid) or current_gid }}</strong>
       <span class="mono">({{ current_gid }})</span>
+      {% if current_group and current_group.last_synced_at %}
+        <span class="muted">Last synced: {{ current_group.last_synced_at }}</span>
+      {% endif %}
       {% if current_group and not current_group.is_enabled %}
         <span class="muted">Not enabled for server-side sync yet.</span>
       {% endif %}
@@ -54,6 +57,12 @@
 
     <button type="submit" class="btnlink" style="margin-top:12px;">Save Workspace</button>
   </form>
+
+  {% if current_gid %}
+    <form method="post" action="/ui/hypothesis/sync_workspace" style="margin-top:12px;">
+      <button type="submit" class="btnlink">Sync My Workspace</button>
+    </form>
+  {% endif %}
 </div>
 
 <div class="card">

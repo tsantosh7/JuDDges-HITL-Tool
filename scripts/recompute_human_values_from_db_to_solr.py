@@ -207,9 +207,19 @@ def main():
 
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
+        role_filter = """
+            COALESCE(hg.is_exportable, TRUE) = TRUE
+            AND COALESCE(hg.group_role, 'human_workspace') IN ('human_workspace', 'gold')
+        """
+        if where:
+            where_sql = "WHERE " + role_filter + " AND " + " AND ".join(where)
+        else:
+            where_sql = "WHERE " + role_filter
+
         sql = f"""
             SELECT ha.document_id, ha.tags, ha.text, ha.exact
             FROM hypothesis_annotations ha
+            JOIN hypothesis_groups hg ON hg.group_id = ha.group_id
             {join}
             {where_sql}
         """

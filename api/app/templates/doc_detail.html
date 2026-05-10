@@ -231,11 +231,20 @@
           <a class="btnlink" href="/ui/hypothesis/access">
             Fix access
           </a>
+
+          {% if workspace_group %}
+            <form method="post" action="/ui/hypothesis/sync_workspace" style="margin:0;">
+              <button type="submit" class="btnlink">Sync My Workspace</button>
+            </form>
+          {% endif %}
         </div>
 
         {% if workspace_group %}
           <div class="muted" style="font-size:12px; margin-top:8px;">
             Workspace: {{ workspace_group.name }} ({{ workspace_group.group_id }})
+            {% if workspace_group.last_synced_at %}
+              - last synced {{ workspace_group.last_synced_at }}
+            {% endif %}
             {% if not workspace_group.is_enabled %}
               - visible for annotation links; not enabled for server-side sync yet.
             {% endif %}
