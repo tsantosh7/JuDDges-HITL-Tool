@@ -2212,7 +2212,7 @@ def upsert_group(db, g: dict) -> HypothesisGroup:
 
     # Don't auto-enable previously disabled groups.
     # If nullable and currently unset, set default.
-    # Exception: a user-pasted personal workspace starts as a disabled placeholder.
+    # Exception: an older user-pasted review group starts as a disabled placeholder.
     # Once the server token can see it in the Hypothesis profile, it is safe to sync.
     if row.is_enabled is None or was_personal_placeholder:
         row.is_enabled = default_enabled

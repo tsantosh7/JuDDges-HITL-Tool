@@ -99,7 +99,7 @@ async function runSync() {
     });
     const prepareData = await prepareResponse.json().catch(() => ({}));
     if (!prepareResponse.ok) {
-      throw new Error(errorText(prepareData, "Workspace preparation failed: " + prepareResponse.status));
+      throw new Error(errorText(prepareData, "Review group preparation failed: " + prepareResponse.status));
     }
     logLine(
       "Prepared project review group: " +
