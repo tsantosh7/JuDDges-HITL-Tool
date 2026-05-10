@@ -2067,6 +2067,13 @@ def upsert_group(db, g: dict) -> HypothesisGroup:
         db.add(row)
         return row
 
+    was_personal_placeholder = (
+        row.is_enabled is False
+        and (row.name or "").startswith("Personal workspace (")
+        and not (row.scopes or [])
+        and not is_public
+    )
+
     # Update metadata
     row.name = name or row.name
     row.organization = org
@@ -2074,7 +2081,9 @@ def upsert_group(db, g: dict) -> HypothesisGroup:
 
     # Don't auto-enable previously disabled groups.
     # If nullable and currently unset, set default.
-    if row.is_enabled is None:
+    # Exception: a user-pasted personal workspace starts as a disabled placeholder.
+    # Once the server token can see it in the Hypothesis profile, it is safe to sync.
+    if row.is_enabled is None or was_personal_placeholder:
         row.is_enabled = default_enabled
 
     # Hard-disable __world__ if exclude is on
@@ -5603,21 +5612,52 @@ def get_my_hypothesis_workspace(request: Request):
 
 class WorkspaceSetIn(BaseModel):
     group_id: str
+    group_name: Optional[str] = None
+
+
+def normalize_hypothesis_group_ref(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme or parsed.netloc:
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if len(parts) >= 2 and parts[0] == "groups":
+            return parts[1].strip()
+        return ""
+
+    raw = raw.strip().strip("/")
+    if "/" in raw:
+        parts = [p for p in raw.split("/") if p]
+        if len(parts) >= 2 and parts[0] == "groups":
+            return parts[1].strip()
+        return ""
+    return raw
 
 
 @app.post("/hypothesis/workspace")
 def set_my_hypothesis_workspace(payload: WorkspaceSetIn, request: Request):
     uid = current_user_id(request)
-    gid = (payload.group_id or "").strip()
+    gid = normalize_hypothesis_group_ref(payload.group_id)
     if not gid:
         raise HTTPException(status_code=400, detail="group_id is required")
+    if gid == HYPOTHESIS_PUBLIC_GROUP_ID:
+        raise HTTPException(status_code=400, detail="Choose a private Hypothesis group, not Public")
 
     db = SessionLocal()
     try:
-        # ensure group exists + enabled (matches /hypothesis/groups behavior) :contentReference[oaicite:3]{index=3}
         g = db.get(HypothesisGroup, gid)
-        if not g or not getattr(g, "is_enabled", True):
-            raise HTTPException(status_code=400, detail="Unknown or disabled group_id")
+        if not g:
+            g = HypothesisGroup(
+                group_id=gid,
+                name=(payload.group_name or f"Personal workspace ({gid})").strip(),
+                scopes=[],
+                is_enabled=False,
+            )
+            db.add(g)
+        elif payload.group_name and not g.name:
+            g.name = payload.group_name.strip()
 
         row = db.get(UserHypothesisWorkspace, uid)
         if row:

@@ -19,7 +19,7 @@ from app.auth.deps import require_paid_user, require_role, require_user
 from app.db import SessionLocal
 
 from sqlalchemy import select, text, func
-from app.models import TopicRun, DocumentTopic, UserHypothesisWorkspace
+from app.models import TopicRun, DocumentTopic, UserHypothesisWorkspace, HypothesisGroup, HypothesisAnnotation
 from app.models import ProjectDocument  # ensure imported
 
 from fastapi import Request
@@ -206,6 +206,31 @@ def build_hypothesis_direct(url: str, group_id: str = "__world__") -> str:
         + "&group="
         + urllib.parse.quote(group_id, safe="")
     )
+
+
+def _parse_hypothesis_group_id(value: str | None) -> str:
+    """
+    Accept a raw Hypothesis group id or a URL such as
+    https://hypothes.is/groups/<group_id>/<slug>.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme or parsed.netloc:
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if len(parts) >= 2 and parts[0] == "groups":
+            return parts[1].strip()
+        return ""
+
+    raw = raw.strip().strip("/")
+    if "/" in raw:
+        parts = [p for p in raw.split("/") if p]
+        if len(parts) >= 2 and parts[0] == "groups":
+            return parts[1].strip()
+        return ""
+    return raw
 
 
 # ============================================================
@@ -1409,10 +1434,40 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
 
     # find user workspace group id
     db = SessionLocal()
+    workspace_group = None
+    workspace_annotations = []
     try:
         uid = user.get("id") or user.get("user_id") or user.get("sub")
         w = db.get(UserHypothesisWorkspace, str(uid)) if uid else None
         WORK_GID = w.group_id if w else None
+        if WORK_GID:
+            g = db.get(HypothesisGroup, WORK_GID)
+            workspace_group = {
+                "group_id": WORK_GID,
+                "name": (g.name if g else "") or WORK_GID,
+                "is_enabled": bool(g.is_enabled) if g else False,
+            }
+            ann_rows = (
+                db.execute(
+                    select(HypothesisAnnotation)
+                    .where(HypothesisAnnotation.group_id == WORK_GID)
+                    .where(HypothesisAnnotation.document_id == document_id)
+                    .order_by(HypothesisAnnotation.updated.desc().nullslast())
+                    .limit(20)
+                )
+                .scalars()
+                .all()
+            )
+            workspace_annotations = [
+                {
+                    "annotation_id": a.annotation_id,
+                    "text": a.text or "",
+                    "tags": a.tags or [],
+                    "exact": a.exact or "",
+                    "updated": a.updated.isoformat() if a.updated else "",
+                }
+                for a in ann_rows
+            ]
     finally:
         db.close()
 
@@ -1483,6 +1538,8 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
             "hyp_gold": hyp_gold,
             "hyp_mine": hyp_mine,
             "workspace_group_id": WORK_GID,
+            "workspace_group": workspace_group,
+            "workspace_annotations": workspace_annotations,
         },
     )
 
@@ -1684,6 +1741,22 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
             if g.get("group_id") == current_gid
         ]
 
+    current_group = None
+    if current_gid and not any(g.get("group_id") == current_gid for g in groups):
+        db = SessionLocal()
+        try:
+            g = db.get(HypothesisGroup, current_gid)
+            current_group = {
+                "group_id": current_gid,
+                "name": (g.name if g else "") or current_gid,
+                "is_enabled": bool(g.is_enabled) if g else False,
+            }
+            groups.insert(0, current_group)
+        finally:
+            db.close()
+    elif current_gid:
+        current_group = next((g for g in groups if g.get("group_id") == current_gid), None)
+
     return request.app.state.templates.TemplateResponse(
         "hypothesis_settings.html",
         {
@@ -1691,6 +1764,7 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
             "user": user,
             "groups": groups,
             "current_gid": current_gid,
+            "current_group": current_group,
             "is_admin": is_admin,
             "message": request.query_params.get("msg"),
         },
@@ -1709,20 +1783,50 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
 @router.post("/settings/hypothesis")
 async def ui_hypothesis_settings_save(
     request: Request,
-    group_id: str = Form(...),
+    group_id: str = Form(""),
+    group_ref: str = Form(""),
     user=Depends(require_paid_user),
 ):
-    role = (user.get("role") or "").lower()
-
-    if role != "admin":
+    gid = _parse_hypothesis_group_id(group_ref) or _parse_hypothesis_group_id(group_id)
+    if not gid:
         return RedirectResponse(
-            "/ui/settings/hypothesis?msg=Only%20an%20admin%20can%20change%20workspace%20assignments",
+            "/ui/settings/hypothesis?msg=Enter%20a%20valid%20Hypothesis%20group%20URL%20or%20ID",
             status_code=303,
         )
 
-    gid = (group_id or "").strip()
-    await asgi_post_json(request, "/hypothesis/workspace", {"group_id": gid})
-    return RedirectResponse("/ui/settings/hypothesis?msg=Workspace%20saved", status_code=303)
+    if gid == "__world__":
+        return RedirectResponse(
+            "/ui/settings/hypothesis?msg=Choose%20a%20private%20Hypothesis%20group,%20not%20Public",
+            status_code=303,
+        )
+
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    if not uid:
+        raise HTTPException(401, "Not authenticated")
+
+    db = SessionLocal()
+    try:
+        group = db.get(HypothesisGroup, gid)
+        if not group:
+            group = HypothesisGroup(
+                group_id=gid,
+                name=f"Personal workspace ({gid})",
+                scopes=[],
+                is_enabled=False,
+            )
+            db.add(group)
+
+        row = db.get(UserHypothesisWorkspace, str(uid))
+        if row:
+            row.group_id = gid
+        else:
+            db.add(UserHypothesisWorkspace(user_id=str(uid), group_id=gid))
+
+        db.commit()
+    finally:
+        db.close()
+
+    return RedirectResponse("/ui/settings/hypothesis?msg=saved", status_code=303)
 
 
 @router.get("/hypothesis/access", response_class=HTMLResponse)

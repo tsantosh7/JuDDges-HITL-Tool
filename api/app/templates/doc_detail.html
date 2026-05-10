@@ -191,18 +191,33 @@
   </p>
 </div>
 
-    {% if canonical_url and hyp_model and hyp_model.hypothesis_incontext %}
+    {% if canonical_url %}
       <div class="card" style="margin:0; padding:14px;">
-        <div class="muted" style="font-size:12px; margin-bottom:6px;">Annotations</div>
+        <div class="muted" style="font-size:12px; margin-bottom:6px;">Human-in-the-loop annotations</div>
 
         <div class="row" style="gap:10px; flex-wrap:wrap;">
-          <a class="btnlink"
-             href="{{ hyp_model.hypothesis_incontext }}"
-             target="_blank"
-             rel="noopener"
-             style="font-weight:600;">
-            Open Model Annotations
-          </a>
+          {% if hyp_mine and hyp_mine.hypothesis_incontext %}
+            <a class="btnlink"
+               href="{{ hyp_mine.hypothesis_incontext }}"
+               target="_blank"
+               rel="noopener"
+               style="font-weight:600;">
+              Annotate in My Workspace
+            </a>
+          {% else %}
+            <a class="btnlink" href="/ui/settings/hypothesis" style="font-weight:600;">
+              Set My Workspace
+            </a>
+          {% endif %}
+
+          {% if hyp_model and hyp_model.hypothesis_incontext %}
+            <a class="btnlink"
+               href="{{ hyp_model.hypothesis_incontext }}"
+               target="_blank"
+               rel="noopener">
+              View Model Annotations
+            </a>
+          {% endif %}
 
           {% if has_human and hyp_gold and hyp_gold.hypothesis_incontext %}
             <a class="btnlink"
@@ -213,23 +228,48 @@
             </a>
           {% endif %}
 
-          {% if hyp_mine and hyp_mine.hypothesis_incontext %}
-            <a class="btnlink"
-               href="{{ hyp_mine.hypothesis_incontext }}"
-               target="_blank"
-               rel="noopener">
-              My Annotations
-            </a>
-          {% else %}
-            <a class="btnlink" href="/ui/settings/hypothesis">
-              Set My Workspace
-            </a>
-          {% endif %}
-
           <a class="btnlink" href="/ui/hypothesis/access">
             Fix access
           </a>
         </div>
+
+        {% if workspace_group %}
+          <div class="muted" style="font-size:12px; margin-top:8px;">
+            Workspace: {{ workspace_group.name }} ({{ workspace_group.group_id }})
+            {% if not workspace_group.is_enabled %}
+              - visible for annotation links; not enabled for server-side sync yet.
+            {% endif %}
+          </div>
+        {% endif %}
+
+        {% if workspace_annotations and workspace_annotations|length > 0 %}
+          <div style="margin-top:10px;">
+            <div class="muted" style="font-size:12px; font-weight:600; margin-bottom:6px;">
+              Synced annotations from my workspace
+            </div>
+            {% for a in workspace_annotations %}
+              <div style="border-top:1px solid #e5e7eb; padding-top:8px; margin-top:8px;">
+                {% if a.tags and a.tags|length > 0 %}
+                  <div>
+                    {% for tag in a.tags %}
+                      <span class="pill">{{ tag }}</span>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+                {% if a.text %}
+                  <div style="margin-top:6px;">{{ a.text }}</div>
+                {% endif %}
+                {% if a.exact %}
+                  <div class="muted" style="font-size:12px; margin-top:6px;">{{ a.exact }}</div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% elif workspace_group and workspace_group.is_enabled %}
+          <div class="muted" style="font-size:12px; margin-top:8px;">
+            No synced annotations from your workspace for this document yet.
+          </div>
+        {% endif %}
 
         {% if not has_model %}
           <div class="muted" style="font-size:12px; margin-top:8px;">

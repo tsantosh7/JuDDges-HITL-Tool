@@ -3,8 +3,8 @@
 
 <h1>Hypothesis workspace</h1>
 
-{% if request.query_params.get("msg") == "saved" %}
-  <div class="alert">✅ Saved</div>
+{% if message %}
+  <div class="alert">{{ "Saved" if message == "saved" else message }}</div>
 {% endif %}
 
 <div class="card">
@@ -13,11 +13,34 @@
     This prevents your codes from mixing with the model baseline or gold annotations.
   </p>
 
-  <form method="post" action="/ui/settings/hypothesis" class="row" style="gap:10px; align-items:end;">
+  {% if current_gid %}
+    <div class="alert" style="margin-top:10px;">
+      Current workspace:
+      <strong>{{ (current_group.name if current_group else current_gid) or current_gid }}</strong>
+      <span class="mono">({{ current_gid }})</span>
+      {% if current_group and not current_group.is_enabled %}
+        <span class="muted">Not enabled for server-side sync yet.</span>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <form method="post" action="/ui/settings/hypothesis" style="margin-top:12px;">
     <div class="grow">
-      <label class="muted">My workspace group</label>
-      <select name="group_id" class="grow" required>
-        <option value="" disabled {% if not current_gid %}selected{% endif %}>Select a group…</option>
+      <label class="muted">Paste your Hypothesis group link or ID</label>
+      <input class="grow"
+             name="group_ref"
+             placeholder="https://hypothes.is/groups/abc123/my-workspace"
+             value="">
+      <div class="muted" style="font-size:12px; margin-top:6px;">
+        You can paste the private group URL immediately after creating it in Hypothesis. An admin can enable server-side sync after the app token has access to the group.
+      </div>
+    </div>
+
+    {% if groups and groups|length > 0 %}
+      <div class="grow" style="margin-top:12px;">
+        <label class="muted">Or choose a synced group</label>
+        <select name="group_id" class="grow">
+          <option value="" {% if not current_gid %}selected{% endif %}>Select a group...</option>
         {% for g in groups %}
           {% set gid = g.group_id %}
           {% set name = g.name or gid %}
@@ -25,13 +48,11 @@
             {{ name }} ({{ gid }})
           </option>
         {% endfor %}
-      </select>
-      <div class="muted" style="font-size:12px; margin-top:6px;">
-        Tip: if you don’t see your workspace group here, make sure it’s enabled in your system and that your Hypothesis token account can access it.
+        </select>
       </div>
-    </div>
+    {% endif %}
 
-    <button type="submit" class="btnlink">Save</button>
+    <button type="submit" class="btnlink" style="margin-top:12px;">Save Workspace</button>
   </form>
 </div>
 
