@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Sync My Workspace</h1>
+
+<div class="card">
+  <div class="muted" style="font-size:12px; margin-bottom:8px;">
+    Project: <strong>{{ project_name or project_id }}</strong>
+    <span class="mono">({{ project_id }})</span>
+  </div>
+  <div class="muted" style="font-size:12px; margin-bottom:12px;">
+    Workspace group: <span class="mono">{{ group_id }}</span>
+  </div>
+
+  <div style="height:14px; background:#e5e7eb; border-radius:7px; overflow:hidden;">
+    <div id="sync-bar" style="height:14px; width:0%; background:#2563eb;"></div>
+  </div>
+
+  <div id="sync-status" class="muted" style="margin-top:12px;">Starting sync...</div>
+
+  <div class="meta" style="margin-top:12px;">
+    <span class="pill">documents: <span id="sync-docs">0/0</span></span>
+    <span class="pill">groups: <span id="sync-groups">0/0</span></span>
+    <span class="pill">seen: <span id="sync-seen">0</span></span>
+    <span class="pill">linked: <span id="sync-linked">0</span></span>
+  </div>
+
+  <pre id="sync-log" class="mono" style="white-space:pre-wrap; margin-top:12px; max-height:260px; overflow:auto;"></pre>
+
+  <div class="row" style="gap:10px; margin-top:12px;">
+    <a class="btnlink" href="/ui/settings/hypothesis">Workspace settings</a>
+    <a class="btnlink" href="/ui/search">Back to search</a>
+  </div>
+</div>
+
+<script>
+const payload = {{ payload | tojson }};
+const bar = document.getElementById("sync-bar");
+const statusEl = document.getElementById("sync-status");
+const docsEl = document.getElementById("sync-docs");
+const groupsEl = document.getElementById("sync-groups");
+const seenEl = document.getElementById("sync-seen");
+const linkedEl = document.getElementById("sync-linked");
+const logEl = document.getElementById("sync-log");
+
+function logLine(text) {
+  logEl.textContent += text + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function updateProgress(data) {
+  const groupsTotal = Number(data.groups_total || 0);
+  const groupsDone = Number(data.groups_done || 0);
+  const docsTotal = Number(data.documents_total || 0);
+  const docI = Number(data.document_i || 0);
+  const seen = Number(data.annotations_seen || 0);
+  const linked = Number(data.annotations_linked_to_docs || 0);
+
+  groupsEl.textContent = groupsDone + "/" + groupsTotal;
+  docsEl.textContent = (docsTotal ? docI : 0) + "/" + docsTotal;
+  seenEl.textContent = seen;
+  linkedEl.textContent = linked;
+
+  let pct = 5;
+  if (docsTotal > 0) {
+    pct = Math.min(95, Math.round((docI / docsTotal) * 95));
+  } else if (groupsTotal > 0) {
+    pct = Math.min(95, Math.round((groupsDone / groupsTotal) * 95));
+  }
+  bar.style.width = pct + "%";
+
+  if (data.phase === "fetching_project_document") {
+    statusEl.textContent = "Checking document " + docI + " of " + docsTotal + "...";
+  } else if (data.phase === "group_fetched") {
+    statusEl.textContent = "Processing fetched annotations...";
+  } else if (data.phase === "group_done") {
+    statusEl.textContent = "Group processed.";
+  } else if (data.phase) {
+    statusEl.textContent = data.phase.replaceAll("_", " ") + "...";
+  }
+}
+
+async function runSync() {
+  try {
+    const response = await fetch("/hypothesis/sync_stream", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error("Sync request failed: " + response.status);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+
+      for (const rawEvent of events) {
+        const eventLine = rawEvent.split("\n").find(line => line.startsWith("event:"));
+        const dataLine = rawEvent.split("\n").find(line => line.startsWith("data:"));
+        const eventName = eventLine ? eventLine.slice(6).trim() : "message";
+        if (!dataLine) continue;
+
+        const data = JSON.parse(dataLine.slice(5).trim());
+        if (eventName === "progress") updateProgress(data);
+        if (eventName === "scope") logLine("Project scope: " + data.documents_total + " documents");
+        if (eventName === "group_start") logLine("Syncing group " + data.group_id + " (" + data.group_role + ")");
+        if (eventName === "group_done") logLine("Done: " + data.annotations_seen + " annotations, " + data.linked + " linked");
+        if (eventName === "group_skipped") logLine("Skipped " + data.group_id + ": " + data.reason);
+        if (eventName === "error") throw new Error(data.detail || data.error || "Sync failed");
+        if (eventName === "done") {
+          bar.style.width = "100%";
+          statusEl.textContent = "Sync complete.";
+          seenEl.textContent = data.annotations_seen || 0;
+          linkedEl.textContent = data.annotations_linked_to_docs || 0;
+          logLine("Sync complete.");
+        }
+      }
+    }
+  } catch (err) {
+    statusEl.textContent = "Sync failed.";
+    logLine(String(err.message || err));
+  }
+}
+
+runSync();
+</script>
+
+{% endblock %}

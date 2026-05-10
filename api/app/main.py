@@ -1564,6 +1564,7 @@ class IngestBatchIn(BaseModel):
 class HypothesisSyncRequest(BaseModel):
     core: str = SOLR_GLOBAL_CORE
     group_id: Optional[str] = None
+    project_id: Optional[UUID] = None
     all_groups: bool = True
     only_enabled_groups: bool = True
     write_snapshot: bool = True
@@ -1998,6 +1999,7 @@ def hypothesis_iter_group_annotations(
     group_id: str,
     limit: int = 200,
     search_after: Optional[str] = None,
+    uri: Optional[str] = None,
 ) -> Iterable[dict]:
     """
     Incremental fetch using search_after on updated.
@@ -2011,6 +2013,8 @@ def hypothesis_iter_group_annotations(
     }
     if search_after:
         params["search_after"] = search_after
+    if uri:
+        params["uri"] = uri
 
     last_cursor = params.get("search_after")
 
@@ -2386,6 +2390,28 @@ def release_hypothesis_group_sync_lock(db, group_id: str, owner: str) -> None:
     db.commit()
 
 
+def project_sync_urls(db, project_id: UUID) -> list[str]:
+    rows = (
+        db.execute(
+            select(Document.canonical_url)
+            .join(ProjectDocument, ProjectDocument.document_id == Document.document_id)
+            .where(ProjectDocument.project_id == project_id)
+            .where(Document.canonical_url.is_not(None))
+            .order_by(Document.document_id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    seen: set[str] = set()
+    out: list[str] = []
+    for url in rows:
+        norm = normalize_url(url)
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
 
 # ------------------------------------------------------------------------------
 # Progress streaming (SSE)
@@ -2453,6 +2479,14 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
             group_ids = [gid for gid in group_ids if gid != HYPOTHESIS_PUBLIC_GROUP_ID]
 
         groups_total = len(group_ids)
+        scoped_urls: list[str] = []
+        if payload.project_id:
+            scoped_urls = project_sync_urls(db, payload.project_id)
+            _emit("scope", {
+                "project_id": str(payload.project_id),
+                "documents_total": len(scoped_urls),
+                "mode": "project",
+            })
 
         totals = {
             "groups_synced": 0,
@@ -2468,6 +2502,9 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
             "phase": "start",
             "groups_total": groups_total,
             "groups_done": 0,
+            "project_id": str(payload.project_id) if payload.project_id else None,
+            "documents_total": len(scoped_urls),
+            "sync_scope": "project" if payload.project_id else "group",
             "annotations_seen": 0,
             "annotations_linked_to_docs": 0,
             "docs_flagged_in_solr": 0,
@@ -2495,7 +2532,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                     .first()
                 )
             cursor = None
-            if g_row and not payload.force_full:
+            if g_row and not payload.force_full and not scoped_urls:
                 cursor = g_row.last_synced_updated
 
             _emit("group_start", {
@@ -2521,31 +2558,71 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                 "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
             })
 
-            ann_list: List[dict] = []
+            ann_by_id: Dict[str, dict] = {}
             last_updated_seen: Optional[str] = None
 
             # Fetch annotations (paginated)
-            for raw in hypothesis_iter_group_annotations(
-                gid,
-                limit=payload.limit_per_request,
-                search_after=cursor,
-            ):
-                ann_list.append(raw)
-                last_updated_seen = raw.get("updated") or last_updated_seen
-
-                # Emit periodic progress so clients can show activity
-                if len(ann_list) % 500 == 0:
+            if scoped_urls:
+                for doc_i, uri in enumerate(scoped_urls, start=1):
                     _emit("progress", {
-                        "phase": "fetching",
+                        "phase": "fetching_project_document",
                         "group_id": gid,
                         "group_i": gi,
                         "groups_total": groups_total,
                         "groups_done": totals["groups_synced"],
-                        "group_annotations_fetched": len(ann_list),
+                        "document_i": doc_i,
+                        "documents_total": len(scoped_urls),
                         "annotations_seen": totals["annotations_seen"],
                         "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
                         "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
                     })
+                    for raw in hypothesis_iter_group_annotations(
+                        gid,
+                        limit=payload.limit_per_request,
+                        uri=uri,
+                    ):
+                        ann_id = raw.get("id")
+                        if ann_id:
+                            ann_by_id[ann_id] = raw
+                        last_updated_seen = raw.get("updated") or last_updated_seen
+            else:
+                for raw in hypothesis_iter_group_annotations(
+                    gid,
+                    limit=payload.limit_per_request,
+                    search_after=cursor,
+                ):
+                    ann_id = raw.get("id")
+                    if ann_id:
+                        ann_by_id[ann_id] = raw
+                    last_updated_seen = raw.get("updated") or last_updated_seen
+
+                    # Emit periodic progress so clients can show activity
+                    if len(ann_by_id) % 500 == 0:
+                        _emit("progress", {
+                            "phase": "fetching",
+                            "group_id": gid,
+                            "group_i": gi,
+                            "groups_total": groups_total,
+                            "groups_done": totals["groups_synced"],
+                            "group_annotations_fetched": len(ann_by_id),
+                            "annotations_seen": totals["annotations_seen"],
+                            "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                            "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+                        })
+
+            ann_list: List[dict] = list(ann_by_id.values())
+            _emit("progress", {
+                "phase": "group_fetched",
+                "group_id": gid,
+                "group_i": gi,
+                "groups_total": groups_total,
+                "groups_done": totals["groups_synced"],
+                "documents_total": len(scoped_urls),
+                "group_annotations_fetched": len(ann_list),
+                "annotations_seen": totals["annotations_seen"],
+                "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+            })
 
             _emit("group_fetched", {"group_id": gid, "annotations_fetched": len(ann_list)})
 
@@ -2556,7 +2633,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
             extracted: List[dict] = []
             urls: List[str] = []
-            max_updated_str: Optional[str] = cursor
+            max_updated_str: Optional[str] = None if scoped_urls else cursor
 
             for raw in ann_list:
                 fields, _has_span, updated_str = hypothesis_extract(raw)
@@ -2596,8 +2673,9 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
             #     g_row.last_synced_at = datetime.utcnow()
             #     db.commit()
 
-            if g_row and max_updated_str:
-                g_row.last_synced_updated = max_updated_str
+            if g_row:
+                if max_updated_str and not scoped_urls:
+                    g_row.last_synced_updated = max_updated_str
                 g_row.last_synced_at = datetime.utcnow()
                 db.commit()
 

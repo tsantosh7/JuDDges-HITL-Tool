@@ -1848,6 +1848,56 @@ async def ui_hypothesis_settings_save(
     return RedirectResponse("/ui/settings/hypothesis?msg=saved", status_code=303)
 
 
+@router.get("/hypothesis/sync_workspace", response_class=HTMLResponse)
+async def ui_hypothesis_sync_workspace_page(
+    request: Request,
+    user=Depends(require_paid_user),
+):
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    if not uid:
+        raise HTTPException(401, "Not authenticated")
+
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    db = SessionLocal()
+    try:
+        row = db.get(UserHypothesisWorkspace, str(uid))
+        if not row or not row.group_id:
+            return RedirectResponse(
+                "/ui/settings/hypothesis?msg=Set%20your%20Hypothesis%20workspace%20first",
+                status_code=303,
+            )
+        group_id = row.group_id
+    finally:
+        db.close()
+
+    core = (request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip() or "hitl_test"
+    payload = {
+        "core": core,
+        "group_id": group_id,
+        "project_id": project_id,
+        "all_groups": False,
+        "only_enabled_groups": False,
+        "write_snapshot": True,
+        "limit_per_request": 200,
+        "force_full": False,
+        "include_public": False,
+    }
+    return request.app.state.templates.TemplateResponse(
+        "hypothesis_sync.html",
+        {
+            "request": request,
+            "user": user,
+            "project_id": project_id,
+            "project_name": _get_project_name(request),
+            "group_id": group_id,
+            "payload": payload,
+        },
+    )
+
+
 @router.post("/hypothesis/sync_workspace")
 async def ui_hypothesis_sync_workspace(
     request: Request,
@@ -1876,6 +1926,7 @@ async def ui_hypothesis_sync_workspace(
         {
             "core": core,
             "group_id": group_id,
+            "project_id": _get_project_id(request),
             "all_groups": False,
             "only_enabled_groups": False,
             "write_snapshot": True,
