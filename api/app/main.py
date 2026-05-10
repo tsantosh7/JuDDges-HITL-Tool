@@ -2172,6 +2172,40 @@ def hypothesis_extract(a: dict) -> Tuple[dict, bool, Optional[str]]:
     return fields, has_span, updated_str
 
 
+def enrich_project_review_fields(fields: dict, ann_by_id: dict[str, dict]) -> dict:
+    """
+    Make reviewer replies usable for sync/export.
+
+    Hypothesis replies often carry no tags of their own. If a reviewer replies to
+    a copied model suggestion, inherit the field/project/doc tags from the parent
+    suggestion. Also accept a plain "reject" reply as a review rejection marker.
+    """
+    raw = fields.get("raw") or {}
+    tags = [str(t).strip() for t in (fields.get("tags") or []) if str(t).strip()]
+    tag_lc = {t.lower() for t in tags}
+
+    text_lc = str(fields.get("text") or "").strip().lower()
+    if text_lc in {"reject", "rejected", "review:reject", "review:rejected"} and not (tag_lc & REVIEW_REJECT_TAGS):
+        tags.append("review:reject")
+        tag_lc.add("review:reject")
+
+    refs = raw.get("references") or []
+    if refs:
+        parent_id = str(refs[-1])
+        parent = ann_by_id.get(parent_id) or {}
+        parent_tags = [str(t).strip() for t in (parent.get("tags") or []) if str(t).strip()]
+        inherit_prefixes = ("field:", "project_id:", "doc_id:", "suggestion_id:")
+        for pfx in inherit_prefixes:
+            if any(t.lower().startswith(pfx) for t in tags):
+                continue
+            parent_tag = next((t for t in parent_tags if t.lower().startswith(pfx)), "")
+            if parent_tag:
+                tags.append(parent_tag)
+
+    fields["tags"] = tags
+    return fields
+
+
 def upsert_group(db, g: dict) -> HypothesisGroup:
     """
     Safeguard: public groups (including __world__) default to disabled.
@@ -2268,7 +2302,7 @@ def upsert_annotations_bulk(
     annotation_status: str = "synced",
     codebook_version: str = "v1",
     model_run_id: Optional[str] = None,
-) -> Tuple[int, int, Dict[str, Dict[str, bool]], Dict[str, Dict[str, set[str]]]]:
+) -> Tuple[int, int, Dict[str, Dict[str, bool]], Dict[str, Dict[str, set[str]]], Dict[str, Dict[str, set[str]]]]:
     """
     Upsert annotations. Returns:
       (annotations_seen, annotations_linked_to_docs, doc_flags_for_solr, doc_codes_for_solr)
@@ -2279,6 +2313,7 @@ def upsert_annotations_bulk(
 
     # document_id -> {"v1": set(), "ext": set(), "all": set()}
     doc_codes: Dict[str, Dict[str, set[str]]] = {}
+    doc_code_values: Dict[str, Dict[str, set[str]]] = {}
 
     for fields in fields_list:
         seen += 1
@@ -2296,8 +2331,9 @@ def upsert_annotations_bulk(
         if row:
             row_updated = parse_dt_utc(row.updated)
 
-            # If existing row is newer/equal, skip overwrite
-            if row_updated and new_updated and new_updated <= row_updated:
+            # If existing row is newer, skip overwrite. Equal timestamps are still
+            # refreshed so sync-rule changes can enrich tags/user metadata.
+            if row_updated and new_updated and new_updated < row_updated:
                 pass
             else:
                 row.group_id = fields["group_id"]
@@ -2364,24 +2400,52 @@ def upsert_annotations_bulk(
             bucket["ext"].update(ext)
             bucket["all"].update(allc)
 
-    return seen, linked, doc_flags, doc_codes
+            value = review_value_from_annotation(fields.get("text"), fields.get("exact"))
+            if value:
+                value_bucket = doc_code_values.setdefault(doc_id, {})
+                for code in allc:
+                    value_bucket.setdefault(code, set()).add(value)
+
+    return seen, linked, doc_flags, doc_codes, doc_code_values
 
 
 def solr_update_flags_for_docs(
     core: str,
     doc_flags: Dict[str, Dict[str, bool]],
     doc_codes: Dict[str, Dict[str, set[str]]] | None = None,
+    doc_code_values: Dict[str, Dict[str, set[str]]] | None = None,
 ) -> int:
     """
     Chunked Solr atomic updates.
     Returns number of docs updated.
     """
     doc_codes = doc_codes or {}
+    doc_code_values = doc_code_values or {}
 
-    if not doc_flags and not doc_codes:
+    if not doc_flags and not doc_codes and not doc_code_values:
         return 0
 
-    doc_ids = set(doc_flags.keys()) | set(doc_codes.keys())
+    doc_ids = set(doc_flags.keys()) | set(doc_codes.keys()) | set(doc_code_values.keys())
+
+    existing_model_codes: dict[str, set[str]] = {}
+    for batch in chunked(sorted(doc_ids), 200):
+        q = "document_id_s:(" + " ".join(f'"{x}"' for x in batch) + ")"
+        data = solr_select(
+            core,
+            {
+                "q": q,
+                "rows": len(batch),
+                "fl": "document_id_s,codes_present_model_ss",
+                "wt": "json",
+            },
+        )
+        for d in (data.get("response", {}) or {}).get("docs", []) or []:
+            did = d.get("document_id_s")
+            vals = d.get("codes_present_model_ss") or []
+            if isinstance(vals, str):
+                vals = [vals]
+            if did:
+                existing_model_codes[str(did)] = {str(v) for v in vals if str(v).strip()}
 
     atomic_docs = []
     for document_id in doc_ids:
@@ -2394,18 +2458,27 @@ def solr_update_flags_for_docs(
 
         codes = doc_codes.get(document_id)
         if codes:
-            atomic["codes_v1_ss"] = {"set": sorted(codes["v1"])}
-            atomic["codes_ext_ss"] = {"set": sorted(codes["ext"])}
-            atomic["codes_all_ss"] = {"set": sorted(codes["all"])}
+            human_codes = set(codes["all"])
+            atomic["codes_present_human_ss"] = {"set": sorted(human_codes)}
+            atomic["codes_all_ss"] = {"set": sorted(human_codes | existing_model_codes.get(document_id, set()))}
+
+        values = doc_code_values.get(document_id) or {}
+        if values:
+            kv = sorted(
+                f"{code}={value}"
+                for code, vals in values.items()
+                for value in vals
+                if code and value
+            )
+            atomic["code_value_human_kv_ss"] = {"set": kv}
+            atomic["code_value_human_norm_kv_ss"] = {"set": kv}
 
         atomic_docs.append(atomic)
 
     updated = 0
     for batch in chunked(atomic_docs, 500):
-        solr_atomic_update(core, batch, commit_within_ms=30000)
-
+        solr_atomic_update(core, batch, commit_within_ms=1000)
         updated += len(batch)
-
     return updated
 
 
@@ -2902,6 +2975,8 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                 for raw in ann_list:
                     fields, _has_span, updated_str = hypothesis_extract(raw)
                     fields["source_type"] = source_type_for_annotation(fields, group_role)
+                    if group_role == "project_review" and fields["source_type"] == "human":
+                        fields = enrich_project_review_fields(fields, ann_by_id)
                     if (
                         group_role == "project_review"
                         and fields["source_type"] == "human"
@@ -2922,7 +2997,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                 url_to_doc = bulk_resolve_document_ids(db, urls_unique)
                 _emit("resolved", {"group_id": gid, "matched_docs": len(set(url_to_doc.values()))})
 
-                seen, linked, doc_flags, doc_codes = upsert_annotations_bulk(
+                seen, linked, doc_flags, doc_codes, doc_code_values = upsert_annotations_bulk(
                     db,
                     extracted,
                     url_to_doc,
@@ -2930,7 +3005,12 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                     workspace_user_id=workspace_user_id,
                 )
                 db.commit()
-                updated_docs = solr_update_flags_for_docs(payload.core, doc_flags, doc_codes=doc_codes)
+                updated_docs = solr_update_flags_for_docs(
+                    payload.core,
+                    doc_flags,
+                    doc_codes=doc_codes,
+                    doc_code_values=doc_code_values,
+                )
 
                 _emit("codes_summary", {
                     "group_id": gid,
@@ -3537,6 +3617,16 @@ REVIEW_REJECT_TAGS = {"review:reject", "review:rejected", "status:rejected", "re
 def has_reject_review_marker(tags: Any) -> bool:
     tag_set = {str(t).strip().lower() for t in _normalize_tags(tags)}
     return bool(tag_set & REVIEW_REJECT_TAGS)
+
+
+def review_value_from_annotation(text: Any, exact: Any) -> str:
+    value = str(text or "").strip()
+    if value:
+        lowered = value.lower()
+        if lowered in REVIEW_REJECT_TAGS or lowered in {"reject", "rejected"}:
+            return ""
+        return value
+    return str(exact or "").strip()
 
 
 def codes_from_tags_and_field_markers(
