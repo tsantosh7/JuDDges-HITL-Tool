@@ -5084,10 +5084,10 @@ def sample_docs(payload: SampleRequest):
 
 def build_hypothesis_incontext(canonical_url: str, group_id: str) -> str:
     """
-    Build a Hypothesis in-context link for a document URL and group.
+    Build a non-Via Hypothesis link for a document URL and group.
     """
     return (
-        "https://hyp.is/go?url="
+        "https://hypothes.is/?url="
         + urllib.parse.quote(canonical_url, safe="")
         + "&group="
         + urllib.parse.quote(group_id, safe="")
@@ -5125,12 +5125,7 @@ def hypothesis_link(
             ).scalars().first()
             gid = g.group_id if g else "__world__"
 
-        # Hypothesis "via" incontext link format:
-        # https://hyp.is/go?url=<ENCODED_URL>&group=<GROUP_ID>
-        incontext = "https://hyp.is/go?url=" + urllib.parse.quote(url, safe="") + "&group=" + urllib.parse.quote(gid, safe="")
-
-        # Direct "annotate" page in Hypothesis client (optional)
-        # This usually lands you in the sidebar for that URL in that group
+        # Direct Hypothesis page. We avoid Via links because Via access is now restricted.
         direct = "https://hypothes.is/?url=" + urllib.parse.quote(url, safe="") + "&group=" + urllib.parse.quote(gid, safe="")
 
         return {
@@ -5138,7 +5133,7 @@ def hypothesis_link(
             "document_id": document_id,
             "canonical_url": url,
             "group_id": gid,
-            "hypothesis_incontext": incontext,
+            "hypothesis_incontext": direct,
             "hypothesis_direct": direct,
         }
     finally:

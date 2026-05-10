@@ -12,37 +12,14 @@
 
   <ul class="muted" style="line-height:1.7;">
     <li>
-      <strong>Model Predictions group:</strong>
-      lets you view annotations created by the model.
-    </li>
-    <li>
       <strong>Shared review group:</strong>
-      where reviewers add corrections, rejections, and new annotations for collaborative projects.
+      where reviewers see copied suggestions and add corrections, rejections, and new annotations.
     </li>
     <li>
-      <strong>Gold annotations group:</strong>
-      used only by admins or judges.
+      <strong>Restricted review group:</strong>
+      optional separate group for projects with limited membership.
     </li>
   </ul>
-</div>
-
-
-<div class="card" style="border:2px solid #dc2626; background:#fff5f5;">
-  <h2 style="color:#b91c1c;">Important: Do not annotate in the Model Predictions group</h2>
-
-  <p style="color:#7f1d1d;">
-    The Model Predictions group is for viewing model-generated annotations only.
-    Do not create, edit, reply to, or delete annotations in this group.
-  </p>
-
-  <p style="color:#7f1d1d;">
-    Adding human annotations to the Model Predictions group may contaminate the model annotation layer
-    and affect downstream review, syncing, and data extraction.
-  </p>
-
-  <p style="color:#7f1d1d; font-weight:700;">
-    Before adding any annotation or reply, switch Hypothesis to the shared review group selected for the project.
-  </p>
 </div>
 
 
@@ -80,31 +57,12 @@
 
   <p class="muted" style="margin-top:12px;">
     After installation, open a document in this tool, activate Hypothesis from your browser,
-    and choose the correct Hypothesis group in the sidebar before annotating.
+    and choose the shared review group in the sidebar before annotating.
   </p>
-</div>
-
-<div class="card" style="border-left:4px solid #f59e0b; background:#fffbeb;">
-  <h2>Model Predictions</h2>
-
-  <p class="muted">
-    Model predictions are managed by the app and should be treated as read-only reference annotations.
-    Users should not annotate in the Model Predictions group.
-  </p>
-
-  <p class="muted">
-    For review work, use the shared review group selected for the project.
-  </p>
-
-  {% if user.role == "admin" %}
-    <a class="btnlink" href="{{ model_group_url }}" target="_blank" rel="noopener">
-      Admin only: Open Model Predictions Group
-    </a>
-  {% endif %}
 </div>
 
 <div class="card" style="border-left:4px solid #16a34a; background:#f0fdf4;">
-  <h2>Step 4 — Join the shared review group</h2>
+  <h2>Step 3 — Join the shared review group</h2>
 
   <p class="muted">
     Most projects use one reusable shared review group. Reviewers join it once, and the app separates project work
@@ -121,7 +79,7 @@
 </div>
 
 <div class="card" style="border-left:4px solid #0ea5e9; background:#f0f9ff;">
-  <h2>Step 5 — Check the selected review group</h2>
+  <h2>Step 4 — Check the selected review group</h2>
 
   <p class="muted">
     Confirm that the selected project has a review group and that the server account can access it.
@@ -134,7 +92,7 @@
 </div>
 
 <div class="card">
-  <h2>Step 6 — Start coding documents</h2>
+  <h2>Step 5 — Start reviewing documents</h2>
 
   <p class="muted">
     Go to Search Documents, open a document, activate Hypothesis in your browser,
@@ -145,18 +103,5 @@
     Go to Search Documents
   </a>
 </div>
-
-{% if user.role == "admin" %}
-  <div class="card">
-    <h2>Admin / judge only — Gold annotations</h2>
-    <p class="muted">
-      Gold annotations are separate from model predictions and project review groups.
-    </p>
-
-    <a class="btnlink" href="{{ gold_group_url }}" target="_blank" rel="noopener">
-      Open Gold Group
-    </a>
-  </div>
-{% endif %}
 
 {% endblock %}

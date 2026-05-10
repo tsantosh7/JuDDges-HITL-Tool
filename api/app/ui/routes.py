@@ -20,7 +20,7 @@ from app.db import SessionLocal
 
 from sqlalchemy import select, text, func
 from app.models import (
-    TopicRun, DocumentTopic, UserHypothesisWorkspace, HypothesisGroup, HypothesisAnnotation,
+    TopicRun, DocumentTopic, UserHypothesisWorkspace, HypothesisGroup,
     ProjectHypothesisReviewGroup,
 )
 from app.models import ProjectDocument  # ensure imported
@@ -194,12 +194,7 @@ async def asgi_delete(
 # Hypothesis helpers (kept if you still use them elsewhere)
 # ============================================================
 def build_hypothesis_incontext(url: str, group_id: str = "__world__") -> str:
-    return (
-        "https://hyp.is/go?url="
-        + urllib.parse.quote(url, safe="")
-        + "&group="
-        + urllib.parse.quote(group_id, safe="")
-    )
+    return build_hypothesis_direct(url, group_id)
 
 
 def build_hypothesis_direct(url: str, group_id: str = "__world__") -> str:
@@ -803,9 +798,6 @@ async def ui_search(
         # "include_facets": "1",
         "include_facets": "1" if start_i == 0 else "0",
     }
-
-    # ✅ ensure Hypothesis links open in model group
-    params["group_id"] = os.getenv("HYPOTHESIS_MODEL_GROUP_ID", "BXp1QL5v")
 
     if scope == "project":
         params["project_id"] = project_id
@@ -1431,14 +1423,9 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
     docs = doc_res.get("docs", []) or []
     doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
 
-    MODEL_GID = (os.getenv("HYP_GROUP_MODEL") or "BXp1QL5v").strip()
-    GOLD_GID = (os.getenv("HYP_GROUP_GOLD") or "K48VWwNg").strip()
-  # set this in env
-
     # find project review group id
     db = SessionLocal()
     workspace_group = None
-    workspace_annotations = []
     WORK_GID = None
     try:
         review_row = db.get(ProjectHypothesisReviewGroup, UUID(str(project_id))) if project_id else None
@@ -1452,34 +1439,10 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
                 "group_role": (g.group_role if g else "") or "project_review",
                 "last_synced_at": g.last_synced_at.isoformat() if g and g.last_synced_at else "",
             }
-            ann_rows = (
-                db.execute(
-                    select(HypothesisAnnotation)
-                    .where(HypothesisAnnotation.group_id == WORK_GID)
-                    .where(HypothesisAnnotation.document_id == document_id)
-                    .order_by(HypothesisAnnotation.updated.desc().nullslast())
-                    .limit(20)
-                )
-                .scalars()
-                .all()
-            )
-            workspace_annotations = [
-                {
-                    "annotation_id": a.annotation_id,
-                    "text": a.text or "",
-                    "tags": a.tags or [],
-                    "exact": a.exact or "",
-                    "updated": a.updated.isoformat() if a.updated else "",
-                }
-                for a in ann_rows
-            ]
     finally:
         db.close()
 
-
-    # build hypothesis links (only if doc_id exists)
-    hyp_model = await _hyp_link_for_group(MODEL_GID)
-    hyp_gold = await _hyp_link_for_group(GOLD_GID)
+    # Build only the selected review-group link for the UI.
     hyp_mine = await _hyp_link_for_group(WORK_GID)
 
     # ✅ Fast membership check using Postgres (authoritative + instant)
@@ -1516,18 +1479,6 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
         topics = topics_res.get("topics", []) or []
 
     codes_view, code_stats = build_codes_view(doc)
-    workspace_tags = {
-        str(tag).strip()
-        for ann in (workspace_annotations or [])
-        for tag in (ann.get("tags") or [])
-        if str(tag).strip()
-    }
-    workspace_tag_keys = {t.lower() for t in workspace_tags}
-    model_suggestion_codes = [
-        r for r in codes_view
-        if r.get("source") == "model" and str(r.get("code") or "").strip().lower() not in workspace_tag_keys
-    ]
-
     back_url_raw = request.query_params.get("back_url") or request.headers.get("referer")
     back_url = _normalize_back_url(back_url_raw) or f"/ui/search?core={core}"
 
@@ -1550,13 +1501,9 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
             "return_to": return_to,
             "codes_view": codes_view,
             "code_stats": code_stats,
-            "hyp_model": hyp_model,
-            "hyp_gold": hyp_gold,
             "hyp_mine": hyp_mine,
             "workspace_group_id": WORK_GID,
             "workspace_group": workspace_group,
-            "workspace_annotations": workspace_annotations,
-            "model_suggestion_codes": model_suggestion_codes,
         },
     )
 

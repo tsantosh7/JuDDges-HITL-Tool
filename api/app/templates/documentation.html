@@ -90,14 +90,14 @@
 
   <h3>5) Review Coding</h3>
   <p class="muted">
-    The platform can copy model suggestions and gold reference annotations into the project review group
-    for the selected project. The original model and gold groups are not exposed for editing. The project review group is
+    The platform can copy suggestions and reference material into the project review group
+    for the selected project. The original source groups are not exposed for editing. The project review group is
     where you review, reject, correct, and add annotations.
   </p>
   <p class="muted">
     If a copied model suggestion is correct, you do not need to accept it manually. Leaving it unchanged means it
     is treated as an implicit accept during export. If it is wrong, add a rejection or correction in your
-    project review group. This keeps the review workload low and preserves the original model and gold records.
+    project review group. This keeps the review workload low and preserves the original source records.
   </p>
   <p class="muted">
     For private Hypothesis groups, the server Hypothesis account must be a member of the project review group before
@@ -194,37 +194,22 @@
   </p>
 </div>
 
-<div class="card" style="border:2px solid #dc2626; background:#fff5f5;">
-  <h2 style="color:#b91c1c;">Critical rule: do not write in the Model Predictions group</h2>
-
-  <p style="color:#7f1d1d;">
-    The Model Predictions group is for viewing model-generated annotations only.
-    Reviewers must not create annotations, edit annotations, delete annotations, or reply to threads in this group.
-  </p>
-
-  <p style="color:#7f1d1d;">
-    All human review work must be done in the project review group.
-    Writing in the Model Predictions group may contaminate the model annotation layer and affect later syncing,
-    review, and data extraction.
-  </p>
-</div>
-
 <div class="card">
   <h2>What you may see in Hypothesis</h2>
 
   <ul>
     <li>Highlighted text where the system has identified a likely relevant passage in the document.</li>
     <li>Notes without highlights where the system could not reliably anchor the value to a precise quote.</li>
-    <li>Model-generated annotations that are intended for review rather than automatic acceptance.</li>
+    <li>Copied suggestions that are intended for human review.</li>
     <li>Human replies showing confirmation, rejection, correction, or discussion.</li>
   </ul>
 </div>
 
 <div class="card">
-  <h2>How to identify model annotations</h2>
+  <h2>How to identify suggestions</h2>
 
   <p>
-    Model annotations may be marked by tags or wording that indicate they were created by the system rather than by a human reviewer.
+    Suggestions may be marked by tags or wording that indicate they were copied into the review group by the system.
     These markers help distinguish proposed values from reviewed values.
   </p>
 
@@ -235,13 +220,13 @@
   </p>
 
   <p>
-    <strong>Remember:</strong> a model annotation is usually a suggestion for review, not a final decision.
+    <strong>Remember:</strong> a copied suggestion is for review, not a final human decision.
     Reviewers should always check the underlying text before confirming it.
   </p>
 </div>
 
 <div class="card">
-  <h2>How to review model annotations</h2>
+  <h2>How to review suggestions</h2>
 
   <p>
     The review process is designed to be simple and consistent. A reviewer’s job is to assess whether the suggested value is supported by the document and, if not, to correct it clearly.
@@ -250,9 +235,8 @@
   <ol>
     <li>Open the document from the workspace.</li>
     <li>Open the Hypothesis sidebar.</li>
-    <li>Use the Model Predictions group only to inspect model suggestions.</li>
-    <li>Switch to the project review group before adding any reply, annotation, correction, or discussion.</li>
-    <li>Read the model annotation and the highlighted text, if present.</li>
+    <li>Select the shared review group before adding any reply, annotation, correction, or discussion.</li>
+    <li>Read the copied suggestion and the highlighted text, if present.</li>
     <li>Compare the suggested value against the document text.</li>
     <li>Decide whether the suggestion is correct, incorrect, incomplete, or unclear.</li>
     <li>Record your review in the project review group using the agreed review approach for your team.</li>
@@ -317,7 +301,6 @@
 
   <ul>
     <li>Always annotate in the selected project review group.</li>
-    <li>Do not annotate in the Model Predictions group.</li>
     <li>Use consistent tags, values, and review wording agreed by your team.</li>
     <li>Keep corrections attached to the relevant document and passage where possible.</li>
     <li>If the project review group is missing from the app, contact an admin before continuing review work.</li>
