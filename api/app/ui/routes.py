@@ -231,6 +231,32 @@ def _parse_hypothesis_group_id(value: str | None) -> str:
     return raw
 
 
+def _default_review_group_id_from_env_or_db() -> str:
+    gid = _parse_hypothesis_group_id(
+        os.getenv("HYPOTHESIS_DEFAULT_REVIEW_GROUP_ID")
+        or os.getenv("HITL_DEFAULT_REVIEW_GROUP_ID")
+        or os.getenv("HYPOTHESIS_SHARED_REVIEW_GROUP_ID")
+        or ""
+    )
+    if gid:
+        return gid
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.execute(
+                select(HypothesisGroup.group_id)
+                .where(HypothesisGroup.group_role == "project_review")
+                .order_by(HypothesisGroup.group_id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        return rows[0] if len(rows) == 1 else ""
+    finally:
+        db.close()
+
+
 # ============================================================
 # Session helpers
 # ============================================================
@@ -1685,18 +1711,33 @@ async def ui_create_project(
 #     )
 @router.get("/settings/hypothesis", response_class=HTMLResponse)
 async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_user)):
-    project_id = _get_project_id(request)
-    if not project_id:
-        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
-
-    workspace_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
-    current_gid = workspace_res.get("group_id")
-    reviewers_res = await asgi_get(request, "/hypothesis/project_reviewers", params={"project_id": project_id})
-    approved_reviewers = reviewers_res.get("reviewers", []) or []
-
     role = (user.get("role") or "").lower()
     is_admin = role == "admin"
     is_review_manager = is_admin
+    project_id = _get_project_id(request)
+    if not project_id and not is_admin:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    if project_id:
+        workspace_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+        current_gid = workspace_res.get("group_id")
+        is_default_review_group = bool(workspace_res.get("is_default") or (workspace_res.get("group") or {}).get("is_default"))
+    else:
+        current_gid = _default_review_group_id_from_env_or_db()
+        is_default_review_group = bool(current_gid)
+
+    if project_id:
+        reviewers_res = await asgi_get(request, "/hypothesis/project_reviewers", params={"project_id": project_id})
+    elif current_gid:
+        reviewers_res = await asgi_get(request, "/hypothesis/group_reviewers", params={"group_id": current_gid})
+    else:
+        reviewers_res = {"reviewers": []}
+    approved_reviewers = reviewers_res.get("reviewers", []) or []
+
+    all_pending_reviewers = []
+    if is_admin:
+        pending_res = await asgi_get(request, "/hypothesis/project_reviewers/all", params={"status": "pending"})
+        all_pending_reviewers = pending_res.get("reviewers", []) or []
 
     groups = []
 
@@ -1738,9 +1779,11 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
             "groups": groups,
             "current_gid": current_gid,
             "current_group": current_group,
+            "is_default_review_group": is_default_review_group,
             "project_id": project_id,
             "project_name": _get_project_name(request),
             "approved_reviewers": approved_reviewers,
+            "all_pending_reviewers": all_pending_reviewers,
             "is_admin": is_admin,
             "is_review_manager": is_review_manager,
             "message": request.query_params.get("msg"),
@@ -1798,9 +1841,26 @@ async def ui_hypothesis_reviewers_save(
     request: Request,
     hypothesis_user: str = Form(""),
     status: str = Form("active"),
+    reviewer_project_id: str = Form(""),
+    reviewer_group_id: str = Form(""),
     user=Depends(require_paid_user),
 ):
-    project_id = _get_project_id(request)
+    role = (user.get("role") or "").lower()
+    if role == "admin" and reviewer_group_id:
+        await asgi_post_json(
+            request,
+            "/hypothesis/group_reviewers",
+            {
+                "group_id": reviewer_group_id,
+                "hypothesis_user": hypothesis_user,
+                "status": status,
+            },
+        )
+        msg_text = "Reviewer list updated"
+        msg = urllib.parse.quote(msg_text)
+        return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
+
+    project_id = reviewer_project_id if role == "admin" and reviewer_project_id else _get_project_id(request)
     if not project_id:
         return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
 
@@ -1943,8 +2003,11 @@ async def ui_hypothesis_access(request: Request, user=Depends(require_user)):
         review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
         review_group_id = review_res.get("group_id")
         review_group = review_res.get("group")
+        is_default_review_group = bool(review_res.get("is_default") or (review_group or {}).get("is_default"))
         if review_group_id:
             review_group_url = f"https://hypothes.is/groups/{review_group_id}"
+    else:
+        is_default_review_group = False
 
     return request.app.state.templates.TemplateResponse(
         "hypothesis_access.html",
@@ -1956,6 +2019,7 @@ async def ui_hypothesis_access(request: Request, user=Depends(require_user)):
             "review_group": review_group,
             "review_group_id": review_group_id,
             "review_group_url": review_group_url,
+            "is_default_review_group": is_default_review_group,
             "workspace_settings_url": workspace_settings_url,
         },
     )

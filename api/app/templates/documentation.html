@@ -156,8 +156,8 @@
   </p>
   <p class="muted">
     In the JuDDGES workflow, Hypothesis is used as the annotation layer. The app copies model suggestions into a
-    project review group. Reviewers work in that group, and the app syncs trusted reviewer annotations back into
-    the server-side reviewed dataset.
+    shared review group. Reviewers work in that group, and the app syncs trusted reviewer annotations back into
+    the server-side reviewed dataset for the selected project.
   </p>
 </div>
 
@@ -183,7 +183,7 @@
   <h2>Join a Review Group and Request Access</h2>
   <ol>
     <li>Open <b>Hypothesis Tool</b> in the top navigation bar.</li>
-    <li>Click <b>Join / Open Review Group</b> and join the Hypothesis group selected for the project.</li>
+    <li>Click <b>Join / Open Review Group</b> and join the shared Hypothesis group. Most projects use the same shared group; restricted projects may use a separate group.</li>
     <li>Return to the tool and click <b>Request / Manage Review Access</b>.</li>
     <li>Enter your Hypothesis username and submit the request.</li>
     <li>An admin approves or blocks the request in the <b>Reviewer access</b> panel.</li>
@@ -195,8 +195,8 @@
   </p>
   <div class="alert">
     Joining the Hypothesis group is not the same as being trusted by the JuDDGES Tool. The server imports human
-    review annotations only from approved reviewers. Pending, blocked, and unknown Hypothesis accounts are ignored
-    during sync.
+    review annotations only from approved reviewers for that shared review group. Pending, blocked, and unknown
+    Hypothesis accounts are ignored during sync.
   </div>
 </div>
 
@@ -207,7 +207,7 @@
   </p>
   <ol>
     <li><b>Select the project</b> in <b>My Projects</b>. The project name should appear in the top bar.</li>
-    <li><b>Open Hypothesis Tool</b> and join the project review group if you have not joined it already.</li>
+    <li><b>Open Hypothesis Tool</b> and join the shared review group if you have not joined it already.</li>
     <li><b>Request review access</b> with your Hypothesis username. Wait until an admin approves you.</li>
     <li><b>Open a document</b> from <b>Search Documents</b> or <b>My Projects</b>.</li>
     <li><b>Turn on Hypothesis</b> in Chrome and choose the project review group in the Hypothesis sidebar.</li>
@@ -227,8 +227,8 @@
   <h2>Sync the Project Review Group</h2>
   <p class="muted">
     Syncing does two things. First, it prepares the workspace by copying model suggestions and available reference
-    annotations into the project review group. Second, it imports approved reviewer annotations from Hypothesis
-    back into the JuDDGES Tool.
+    annotations into the shared review group for the selected project's documents. Second, it imports approved
+    reviewer annotations from Hypothesis back into the JuDDGES Tool.
   </p>
   <ol>
     <li>Select the correct project.</li>
@@ -344,7 +344,7 @@
     <li>Set or confirm the shared project review group.</li>
     <li>Share the group link with reviewers.</li>
     <li>Ask reviewers to submit review access requests with their Hypothesis usernames.</li>
-    <li>Approve trusted reviewers and block users who should not contribute to the reviewed dataset.</li>
+    <li>Approve trusted reviewers for the shared review group and block users who should not contribute to the reviewed dataset.</li>
     <li>Run <b>Sync Project Review Group</b> to copy suggestions and import approved review annotations.</li>
     <li>Use <b>Extract Data</b> and choose <b>Final reviewed dataset</b> for the normal HiTL output.</li>
   </ol>

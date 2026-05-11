@@ -73,13 +73,16 @@
       Current project review group:
       <strong>{{ (review_group.name if review_group else review_group_id) or review_group_id }}</strong>
       <span class="mono">({{ review_group_id }})</span>
+      {% if is_default_review_group %}
+        <span class="muted">using the shared default group</span>
+      {% endif %}
     </p>
     <a class="btnlink" href="{{ review_group_url }}" target="_blank" rel="noopener">
       Join / Open Review Group
     </a>
   {% else %}
     <div class="alert" style="margin-top:12px;">
-      This project does not have a selected review group yet. Ask an admin to set the shared review group first.
+      No shared review group is configured yet. Ask an admin to set the default shared review group.
     </div>
   {% endif %}
   <p class="muted">

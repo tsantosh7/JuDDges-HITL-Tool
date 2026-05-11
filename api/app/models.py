@@ -99,6 +99,21 @@ class ProjectHypothesisReviewer(Base):
     project = relationship("Project")
 
 
+class HypothesisGroupReviewer(Base):
+    __tablename__ = "hypothesis_group_reviewers"
+
+    group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), primary_key=True)
+    hypothesis_user = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="pending")
+    requested_by = Column(String, nullable=True)
+    reviewed_by = Column(String, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = relationship("HypothesisGroup")
+
+
 class HypothesisGroup(Base):
     __tablename__ = "hypothesis_groups"
 

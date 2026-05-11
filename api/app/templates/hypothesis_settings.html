@@ -13,10 +13,16 @@
     Model suggestions and gold references are copied into this group without exposing the original source groups.
     The same shared review group can be reused across many projects; the app separates work using project and document tags.
   </p>
-  <div class="muted" style="font-size:12px; margin-bottom:12px;">
-    Project: <strong>{{ project_name or project_id }}</strong>
-    <span class="mono">({{ project_id }})</span>
-  </div>
+  {% if project_id %}
+    <div class="muted" style="font-size:12px; margin-bottom:12px;">
+      Project: <strong>{{ project_name or project_id }}</strong>
+      <span class="mono">({{ project_id }})</span>
+    </div>
+  {% else %}
+    <div class="muted" style="font-size:12px; margin-bottom:12px;">
+      Admin view: managing the shared review workspace without a selected project.
+    </div>
+  {% endif %}
   <div class="alert" style="margin-top:10px;">
     Recommended default: use one shared review group for collaborative projects. Create a separate group only when a
     project has restricted membership or confidentiality requirements.
@@ -27,6 +33,9 @@
       Current selected review group:
       <strong>{{ (current_group.name if current_group else current_gid) or current_gid }}</strong>
       <span class="mono">({{ current_gid }})</span>
+      {% if is_default_review_group %}
+        <span class="muted">using the shared default group</span>
+      {% endif %}
       {% if current_group and current_group.last_synced_at %}
         <span class="muted">Last synced: {{ current_group.last_synced_at }}</span>
       {% endif %}
@@ -41,7 +50,7 @@
     </div>
   {% endif %}
 
-  {% if is_review_manager %}
+  {% if is_review_manager and project_id %}
     <form method="post" action="/ui/settings/hypothesis" style="margin-top:12px;">
       <div class="grow">
         <label class="muted">Paste the shared or project-specific Hypothesis group link or ID</label>
@@ -73,13 +82,18 @@
 
       <button type="submit" class="btnlink" style="margin-top:12px;">Save Review Group</button>
     </form>
+  {% elif is_review_manager %}
+    <div class="alert" style="margin-top:12px;">
+      Select a project only if you need to set a project-specific restricted review group. Reviewer approval for
+      the shared review group can be managed here without selecting a project.
+    </div>
   {% else %}
     <div class="alert" style="margin-top:12px;">
       Only admins can change the selected review group.
     </div>
   {% endif %}
 
-  {% if current_gid %}
+  {% if current_gid and project_id %}
     <div style="margin-top:12px;">
       <a class="btnlink" href="/ui/hypothesis/sync_workspace">Sync Project Review Group</a>
     </div>
@@ -99,7 +113,53 @@
   </p>
 
   {% if is_review_manager %}
+    {% if all_pending_reviewers and all_pending_reviewers|length > 0 %}
+      <div class="alert" style="margin-top:12px;">
+        Pending reviewer requests for shared review groups are shown below. Approving a reviewer trusts that
+        Hypothesis account for the named review group.
+      </div>
+      <table class="table" style="margin-top:12px;">
+        <thead>
+          <tr>
+            <th>Review group</th>
+            <th>Hypothesis account</th>
+            <th>Requested</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in all_pending_reviewers %}
+            <tr>
+              <td>
+                <strong>{{ r.group_name }}</strong>
+                <div class="mono" style="font-size:12px;">{{ r.group_id }}</div>
+              </td>
+              <td class="mono">{{ r.hypothesis_user }}</td>
+              <td>{{ r.created_at }}</td>
+              <td>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                    <input type="hidden" name="reviewer_group_id" value="{{ r.group_id }}">
+                    <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
+                    <input type="hidden" name="status" value="active">
+                    <button type="submit" class="btnlink">Approve</button>
+                  </form>
+                  <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                    <input type="hidden" name="reviewer_group_id" value="{{ r.group_id }}">
+                    <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
+                    <input type="hidden" name="status" value="blocked">
+                    <button type="submit" class="btnlink">Block</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
     <form method="post" action="/ui/settings/hypothesis/reviewers" class="row" style="margin-top:12px;">
+      <input type="hidden" name="reviewer_group_id" value="{{ current_gid or '' }}">
       <div class="grow">
         <label class="muted">Add or update reviewer</label>
         <input name="hypothesis_user" placeholder="username or acct:username@hypothes.is">
@@ -144,23 +204,27 @@
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
                   {% if r.status == "pending" %}
                     <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                      <input type="hidden" name="reviewer_group_id" value="{{ current_gid }}">
                       <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
                       <input type="hidden" name="status" value="active">
                       <button type="submit" class="btnlink">Approve</button>
                     </form>
                     <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                      <input type="hidden" name="reviewer_group_id" value="{{ current_gid }}">
                       <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
                       <input type="hidden" name="status" value="blocked">
                       <button type="submit" class="btnlink">Block</button>
                     </form>
                   {% elif r.status == "blocked" %}
                     <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                      <input type="hidden" name="reviewer_group_id" value="{{ current_gid }}">
                       <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
                       <input type="hidden" name="status" value="active">
                       <button type="submit" class="btnlink">Allow</button>
                     </form>
                   {% else %}
                     <form method="post" action="/ui/settings/hypothesis/reviewers" style="margin:0;">
+                      <input type="hidden" name="reviewer_group_id" value="{{ current_gid }}">
                       <input type="hidden" name="hypothesis_user" value="{{ r.hypothesis_user }}">
                       <input type="hidden" name="status" value="blocked">
                       <button type="submit" class="btnlink">Block</button>

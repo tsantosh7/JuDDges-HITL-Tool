@@ -58,7 +58,7 @@ from .init_db import init
 from .models import (
     Team, Project, Document, ProjectDocument,
     HypothesisGroup, HypothesisAnnotation, UserHypothesisWorkspace, ProjectHypothesisReviewGroup,
-    ProjectHypothesisReviewer,
+    ProjectHypothesisReviewer, HypothesisGroupReviewer,
     Code, CodeAlias, ProjectDocumentReview, TopicRun, DocumentTopic, DocEmbedding,
 )
 
@@ -2811,6 +2811,31 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
         if exclude_public:
             group_ids = [gid for gid in group_ids if gid != HYPOTHESIS_PUBLIC_GROUP_ID]
 
+        # Project review groups can be large shared workspaces. Never sync them
+        # globally by accident; the project_id is what limits the sync to the
+        # selected project's documents.
+        if not payload.project_id and group_ids:
+            project_review_group_ids = []
+            for gid in group_ids:
+                row = db.get(HypothesisGroup, gid)
+                role = getattr(row, "group_role", None) or infer_hypothesis_group_role(gid)
+                if role == "project_review":
+                    project_review_group_ids.append(gid)
+
+            if project_review_group_ids and payload.group_id and not payload.all_groups:
+                raise HTTPException(
+                    status_code=400,
+                    detail="project_id is required when syncing a project review group",
+                )
+
+            if project_review_group_ids:
+                blocked = set(project_review_group_ids)
+                group_ids = [gid for gid in group_ids if gid not in blocked]
+                _emit("project_review_groups_skipped", {
+                    "reason": "project_id_required",
+                    "group_ids": project_review_group_ids,
+                })
+
         groups_total = len(group_ids)
         scoped_urls: list[str] = []
         if payload.project_id:
@@ -2980,7 +3005,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                     if (
                         group_role == "project_review"
                         and fields["source_type"] == "human"
-                        and not project_review_user_allowed(db, payload.project_id, fields.get("user"))
+                        and not group_review_user_allowed(db, gid, fields.get("user"))
                     ):
                         totals["annotations_skipped_unapproved_reviewers"] += 1
                         continue
@@ -3080,11 +3105,14 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
     try:
         assert_project_member_or_admin(db, payload.project_id, uid, request)
 
-        review_group = db.get(ProjectHypothesisReviewGroup, payload.project_id)
-        if not review_group or review_group.group_id != payload.group_id:
+        configured_group_id, is_default_group = project_review_group_id(db, payload.project_id)
+        if not configured_group_id or configured_group_id != payload.group_id:
             raise HTTPException(403, "Can only prepare the configured project review group")
 
         group = db.get(HypothesisGroup, payload.group_id)
+        if not group and is_default_group:
+            group = ensure_project_review_group(db, payload.group_id)
+            db.commit()
         if not group:
             raise HTTPException(404, "Project review group not found")
 
@@ -6806,6 +6834,12 @@ class ProjectHypothesisReviewerIn(BaseModel):
     status: str = "pending"
 
 
+class HypothesisGroupReviewerIn(BaseModel):
+    group_id: str
+    hypothesis_user: str
+    status: str = "pending"
+
+
 def normalize_hypothesis_group_ref(value: str | None) -> str:
     raw = (value or "").strip()
     if not raw:
@@ -6825,6 +6859,93 @@ def normalize_hypothesis_group_ref(value: str | None) -> str:
             return parts[1].strip()
         return ""
     return raw
+
+
+def default_project_review_group_id(db) -> str:
+    """
+    Return the shared review group used when a project has no custom group.
+
+    Production can set this explicitly with HYPOTHESIS_DEFAULT_REVIEW_GROUP_ID
+    or HITL_DEFAULT_REVIEW_GROUP_ID. If it is not set, fall back only when the
+    database has exactly one project_review group, so multiple private review
+    groups do not get selected accidentally.
+    """
+    configured = normalize_hypothesis_group_ref(
+        os.getenv("HYPOTHESIS_DEFAULT_REVIEW_GROUP_ID")
+        or os.getenv("HITL_DEFAULT_REVIEW_GROUP_ID")
+        or os.getenv("HYPOTHESIS_SHARED_REVIEW_GROUP_ID")
+        or ""
+    )
+    if configured:
+        return configured
+
+    enabled_rows = (
+        db.execute(
+            select(HypothesisGroup.group_id)
+            .where(HypothesisGroup.group_role == "project_review")
+            .where(HypothesisGroup.is_enabled.is_(True))
+            .order_by(HypothesisGroup.group_id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    if len(enabled_rows) == 1:
+        return enabled_rows[0]
+
+    all_rows = (
+        db.execute(
+            select(HypothesisGroup.group_id)
+            .where(HypothesisGroup.group_role == "project_review")
+            .order_by(HypothesisGroup.group_id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    return all_rows[0] if len(all_rows) == 1 else ""
+
+
+def project_review_group_id(db, project_id: UUID) -> tuple[str, bool]:
+    row = db.get(ProjectHypothesisReviewGroup, project_id)
+    if row:
+        return row.group_id, False
+
+    gid = default_project_review_group_id(db)
+    return gid, bool(gid)
+
+
+def project_review_group_payload(db, gid: str, *, is_default: bool) -> dict:
+    group = db.get(HypothesisGroup, gid) if gid else None
+    return {
+        "group_id": gid,
+        "name": (group.name if group else "") or gid,
+        "is_enabled": bool(group.is_enabled) if group else False,
+        "group_role": (group.group_role if group else "") or "project_review",
+        "last_synced_at": group.last_synced_at.isoformat() if group and group.last_synced_at else "",
+        "is_default": bool(is_default),
+    }
+
+
+def ensure_project_review_group(db, gid: str, *, name: str | None = None, is_enabled: bool = False) -> HypothesisGroup:
+    group = db.get(HypothesisGroup, gid)
+    if group:
+        group.group_role = "project_review"
+        group.is_exportable = True
+        if name and not group.name:
+            group.name = name
+        return group
+
+    group = HypothesisGroup(
+        group_id=gid,
+        name=name or f"Shared review workspace ({gid})",
+        scopes=[],
+        is_enabled=is_enabled,
+        group_role="project_review",
+        owner_user_id=None,
+        is_exportable=True,
+    )
+    db.add(group)
+    db.flush()
+    return group
 
 
 def normalize_hypothesis_user(value: str | None) -> str:
@@ -6848,14 +6969,14 @@ def normalize_hypothesis_user(value: str | None) -> str:
     return f"acct:{raw.lower()}@hypothes.is"
 
 
-def project_review_user_allowed(db, project_id: UUID | None, hypothesis_user: str | None) -> bool:
-    if not project_id:
+def group_review_user_allowed(db, group_id: str | None, hypothesis_user: str | None) -> bool:
+    if not group_id:
         return False
     normalized = normalize_hypothesis_user(hypothesis_user)
     if not normalized:
         return False
 
-    row = db.get(ProjectHypothesisReviewer, {"project_id": project_id, "hypothesis_user": normalized})
+    row = db.get(HypothesisGroupReviewer, {"group_id": group_id, "hypothesis_user": normalized})
     if row and row.status == "active":
         return True
     if row:
@@ -6863,9 +6984,9 @@ def project_review_user_allowed(db, project_id: UUID | None, hypothesis_user: st
 
     active_count = db.execute(
         select(func.count())
-        .select_from(ProjectHypothesisReviewer)
-        .where(ProjectHypothesisReviewer.project_id == project_id)
-        .where(ProjectHypothesisReviewer.status == "active")
+        .select_from(HypothesisGroupReviewer)
+        .where(HypothesisGroupReviewer.group_id == group_id)
+        .where(HypothesisGroupReviewer.status == "active")
     ).scalar() or 0
 
     # Secure default: once a shared review group is used, only explicitly approved
@@ -6879,22 +7000,16 @@ def get_project_hypothesis_review_group(project_id: UUID, request: Request):
     db = SessionLocal()
     try:
         assert_project_member_or_admin(db, project_id, uid, request)
-        row = db.get(ProjectHypothesisReviewGroup, project_id)
-        if not row:
+        gid, is_default = project_review_group_id(db, project_id)
+        if not gid:
             return {"ok": True, "project_id": str(project_id), "group_id": None, "group": None}
 
-        group = db.get(HypothesisGroup, row.group_id)
         return {
             "ok": True,
             "project_id": str(project_id),
-            "group_id": row.group_id,
-            "group": {
-                "group_id": row.group_id,
-                "name": (group.name if group else "") or row.group_id,
-                "is_enabled": bool(group.is_enabled) if group else False,
-                "group_role": (group.group_role if group else "") or "project_review",
-                "last_synced_at": group.last_synced_at.isoformat() if group and group.last_synced_at else "",
-            },
+            "group_id": gid,
+            "is_default": is_default,
+            "group": project_review_group_payload(db, gid, is_default=is_default),
         }
     finally:
         db.close()
@@ -6976,11 +7091,14 @@ def list_project_hypothesis_reviewers(project_id: UUID, request: Request):
     db = SessionLocal()
     try:
         assert_project_member_or_admin(db, project_id, uid, request)
+        group_id, _is_default = project_review_group_id(db, project_id)
+        if not group_id:
+            return {"ok": True, "project_id": str(project_id), "group_id": None, "reviewers": []}
         rows = (
             db.execute(
-                select(ProjectHypothesisReviewer)
-                .where(ProjectHypothesisReviewer.project_id == project_id)
-                .order_by(ProjectHypothesisReviewer.hypothesis_user.asc())
+                select(HypothesisGroupReviewer)
+                .where(HypothesisGroupReviewer.group_id == group_id)
+                .order_by(HypothesisGroupReviewer.hypothesis_user.asc())
             )
             .scalars()
             .all()
@@ -6990,16 +7108,174 @@ def list_project_hypothesis_reviewers(project_id: UUID, request: Request):
         return {
             "ok": True,
             "project_id": str(project_id),
+            "group_id": group_id,
             "reviewers": [
                 {
                     "hypothesis_user": r.hypothesis_user,
                     "status": r.status,
-                    "added_by": r.added_by,
+                    "requested_by": r.requested_by,
+                    "reviewed_by": r.reviewed_by,
                     "created_at": r.created_at.isoformat() if r.created_at else "",
                     "updated_at": r.updated_at.isoformat() if r.updated_at else "",
                 }
                 for r in rows
             ],
+        }
+    finally:
+        db.close()
+
+
+@app.get("/hypothesis/project_reviewers/all")
+def list_all_project_hypothesis_reviewers(
+    request: Request,
+    status: Optional[str] = None,
+):
+    assert_admin_user(request)
+    status_filter = (status or "").strip().lower()
+    if status_filter and status_filter not in {"pending", "active", "blocked"}:
+        raise HTTPException(400, "status must be pending|active|blocked")
+
+    db = SessionLocal()
+    try:
+        stmt = (
+            select(HypothesisGroupReviewer, HypothesisGroup.name)
+            .join(HypothesisGroup, HypothesisGroup.group_id == HypothesisGroupReviewer.group_id)
+            .order_by(
+                HypothesisGroup.name.asc(),
+                HypothesisGroupReviewer.status.asc(),
+                HypothesisGroupReviewer.hypothesis_user.asc(),
+            )
+        )
+        if status_filter:
+            stmt = stmt.where(HypothesisGroupReviewer.status == status_filter)
+
+        rows = db.execute(stmt).all()
+        return {
+            "ok": True,
+            "reviewers": [
+                {
+                    "group_id": r.group_id,
+                    "group_name": group_name or r.group_id,
+                    "hypothesis_user": r.hypothesis_user,
+                    "status": r.status,
+                    "requested_by": r.requested_by,
+                    "reviewed_by": r.reviewed_by,
+                    "created_at": r.created_at.isoformat() if r.created_at else "",
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+                }
+                for r, group_name in rows
+            ],
+        }
+    finally:
+        db.close()
+
+
+@app.get("/hypothesis/group_reviewers")
+def list_hypothesis_group_reviewers(group_id: str, request: Request):
+    assert_admin_user(request)
+    gid = normalize_hypothesis_group_ref(group_id)
+    if not gid:
+        raise HTTPException(400, "group_id is required")
+
+    db = SessionLocal()
+    try:
+        group = db.get(HypothesisGroup, gid)
+        if not group:
+            return {"ok": True, "group_id": gid, "reviewers": []}
+
+        rows = (
+            db.execute(
+                select(HypothesisGroupReviewer)
+                .where(HypothesisGroupReviewer.group_id == gid)
+                .order_by(HypothesisGroupReviewer.status.asc(), HypothesisGroupReviewer.hypothesis_user.asc())
+            )
+            .scalars()
+            .all()
+        )
+        status_order = {"pending": 0, "active": 1, "blocked": 2}
+        rows = sorted(rows, key=lambda r: (status_order.get((r.status or "").lower(), 9), r.hypothesis_user))
+        return {
+            "ok": True,
+            "group_id": gid,
+            "reviewers": [
+                {
+                    "hypothesis_user": r.hypothesis_user,
+                    "status": r.status,
+                    "requested_by": r.requested_by,
+                    "reviewed_by": r.reviewed_by,
+                    "created_at": r.created_at.isoformat() if r.created_at else "",
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        db.close()
+
+
+@app.post("/hypothesis/group_reviewers")
+def upsert_hypothesis_group_reviewer(payload: HypothesisGroupReviewerIn, request: Request):
+    user = get_current_user(request)
+    uid = current_user_id(request)
+    gid = normalize_hypothesis_group_ref(payload.group_id)
+    status = (payload.status or "pending").strip().lower()
+    if not gid:
+        raise HTTPException(400, "group_id is required")
+    if status not in {"pending", "active", "blocked"}:
+        raise HTTPException(400, "status must be pending|active|blocked")
+    hyp_user = normalize_hypothesis_user(payload.hypothesis_user)
+    if not hyp_user:
+        raise HTTPException(400, "hypothesis_user is required")
+
+    db = SessionLocal()
+    try:
+        group = db.get(HypothesisGroup, gid)
+        if not group:
+            if gid == default_project_review_group_id(db):
+                group = ensure_project_review_group(db, gid)
+            else:
+                raise HTTPException(404, "Review group not found")
+        if group.group_role != "project_review":
+            raise HTTPException(400, "Reviewer approval is only supported for project review groups")
+
+        is_admin = (user.get("role") or "").lower() == "admin"
+        if status in {"active", "blocked"} and not is_admin:
+            raise HTTPException(403, "Only admins can approve or block Hypothesis reviewers")
+
+        row = db.get(HypothesisGroupReviewer, {"group_id": gid, "hypothesis_user": hyp_user})
+        if row and not is_admin:
+            if row.status == "blocked":
+                raise HTTPException(403, "This Hypothesis reviewer is blocked for this review group")
+            return {
+                "ok": True,
+                "group_id": gid,
+                "hypothesis_user": hyp_user,
+                "status": row.status,
+                "requested_by": row.requested_by,
+            }
+
+        if row:
+            row.status = status
+            row.requested_by = row.requested_by or uid
+            if status in {"active", "blocked"}:
+                row.reviewed_by = uid
+        else:
+            row = HypothesisGroupReviewer(
+                group_id=gid,
+                hypothesis_user=hyp_user,
+                status=status,
+                requested_by=uid,
+                reviewed_by=uid if status in {"active", "blocked"} else None,
+            )
+            db.add(row)
+
+        db.commit()
+        return {
+            "ok": True,
+            "group_id": gid,
+            "hypothesis_user": hyp_user,
+            "status": status,
+            "requested_by": user.get("username") or user.get("email") or uid,
         }
     finally:
         db.close()
@@ -7019,38 +7295,48 @@ def upsert_project_hypothesis_reviewer(payload: ProjectHypothesisReviewerIn, req
     db = SessionLocal()
     try:
         assert_project_member_or_admin(db, payload.project_id, uid, request)
+        group_id, _is_default = project_review_group_id(db, payload.project_id)
+        if not group_id:
+            raise HTTPException(400, "This project does not have a review group")
+        ensure_project_review_group(db, group_id)
+
         is_admin = (user.get("role") or "").lower() == "admin"
         if status in {"active", "blocked"} and not is_admin:
             raise HTTPException(403, "Only admins can approve or block Hypothesis reviewers")
-        row = db.get(ProjectHypothesisReviewer, {"project_id": payload.project_id, "hypothesis_user": hyp_user})
+        row = db.get(HypothesisGroupReviewer, {"group_id": group_id, "hypothesis_user": hyp_user})
         if row and not is_admin:
             if row.status == "blocked":
-                raise HTTPException(403, "This Hypothesis reviewer is blocked for this project")
+                raise HTTPException(403, "This Hypothesis reviewer is blocked for this review group")
             return {
                 "ok": True,
                 "project_id": str(payload.project_id),
+                "group_id": group_id,
                 "hypothesis_user": hyp_user,
                 "status": row.status,
-                "added_by": row.added_by,
+                "requested_by": row.requested_by,
             }
         if row:
             row.status = status
-            row.added_by = row.added_by or uid
+            if status in {"active", "blocked"}:
+                row.reviewed_by = uid
+            row.requested_by = row.requested_by or uid
         else:
-            row = ProjectHypothesisReviewer(
-                project_id=payload.project_id,
+            row = HypothesisGroupReviewer(
+                group_id=group_id,
                 hypothesis_user=hyp_user,
                 status=status,
-                added_by=uid,
+                requested_by=uid,
+                reviewed_by=uid if status in {"active", "blocked"} else None,
             )
             db.add(row)
         db.commit()
         return {
             "ok": True,
             "project_id": str(payload.project_id),
+            "group_id": group_id,
             "hypothesis_user": hyp_user,
             "status": status,
-            "added_by": user.get("username") or user.get("email") or uid,
+            "requested_by": user.get("username") or user.get("email") or uid,
         }
     finally:
         db.close()

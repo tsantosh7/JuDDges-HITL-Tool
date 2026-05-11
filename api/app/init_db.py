@@ -71,6 +71,45 @@ def _apply_lightweight_migrations():
         CREATE INDEX IF NOT EXISTS idx_project_hypothesis_reviewers_status
           ON project_hypothesis_reviewers(project_id, status)
         """,
+        """
+        CREATE TABLE IF NOT EXISTS hypothesis_group_reviewers (
+          group_id TEXT NOT NULL REFERENCES hypothesis_groups(group_id) ON DELETE CASCADE,
+          hypothesis_user TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          requested_by TEXT NULL,
+          reviewed_by TEXT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (group_id, hypothesis_user)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_hypothesis_group_reviewers_status
+          ON hypothesis_group_reviewers(group_id, status)
+        """,
+        """
+        INSERT INTO hypothesis_group_reviewers (
+          group_id,
+          hypothesis_user,
+          status,
+          requested_by,
+          reviewed_by,
+          created_at,
+          updated_at
+        )
+        SELECT
+          prg.group_id,
+          phr.hypothesis_user,
+          phr.status,
+          phr.added_by,
+          CASE WHEN phr.status IN ('active', 'blocked') THEN phr.added_by ELSE NULL END,
+          phr.created_at,
+          phr.updated_at
+        FROM project_hypothesis_reviewers phr
+        JOIN project_hypothesis_review_groups prg
+          ON prg.project_id = phr.project_id
+        ON CONFLICT (group_id, hypothesis_user) DO NOTHING
+        """,
     ]
     with engine.begin() as conn:
         for stmt in statements:
