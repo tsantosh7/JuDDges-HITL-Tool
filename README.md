@@ -83,8 +83,9 @@ Core tables are declared in `api/app/models.py`:
 - `documents`: canonical document records.
 - `project_documents`: many-to-many project/document membership.
 - `hypothesis_groups`: synced Hypothesis groups.
+- `project_hypothesis_review_groups`: selected shared/project review group per project.
 - `hypothesis_annotations`: synced Hypothesis annotations.
-- `user_hypothesis_workspaces`: selected Hypothesis workspace per user.
+- `user_hypothesis_workspaces`: legacy per-user review mapping, retained for compatibility.
 - `codes`: canonical code/tag registry.
 - `code_aliases`: alias-to-canonical-code mapping.
 - `project_document_reviews`: per-project document review state.
@@ -295,8 +296,9 @@ Hypothesis support is used to sync annotation groups and annotations into the lo
 Relevant workflows:
 
 - Configure a Hypothesis token through `HYPOTHESIS_API_TOKEN`.
-- Select or store a user Hypothesis workspace.
-- Sync groups/annotations through the API or scripts.
+- Select a shared or project-specific Hypothesis review group for each project.
+- Copy model suggestions and gold references into that review group, tagged by project and document.
+- Sync the selected review group through the API or scripts.
 - Use document links to open Hypothesis in-context annotation views.
 
 Public Hypothesis syncing is guarded by default. The code treats `__world__` as public and excludes it unless explicitly configured otherwise.

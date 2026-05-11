@@ -71,6 +71,49 @@ class ProjectDocument(Base):
     document = relationship("Document")
 
 
+class ProjectHypothesisReviewGroup(Base):
+    __tablename__ = "project_hypothesis_review_groups"
+
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), primary_key=True)
+    group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), nullable=False)
+    created_by = Column(String, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project")
+    group = relationship("HypothesisGroup")
+
+
+class ProjectHypothesisReviewer(Base):
+    __tablename__ = "project_hypothesis_reviewers"
+
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), primary_key=True)
+    hypothesis_user = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="active")
+    added_by = Column(String, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project")
+
+
+class HypothesisGroupReviewer(Base):
+    __tablename__ = "hypothesis_group_reviewers"
+
+    group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), primary_key=True)
+    hypothesis_user = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="pending")
+    requested_by = Column(String, nullable=True)
+    reviewed_by = Column(String, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    group = relationship("HypothesisGroup")
+
+
 class HypothesisGroup(Base):
     __tablename__ = "hypothesis_groups"
 
@@ -79,6 +122,11 @@ class HypothesisGroup(Base):
     organization = Column(String, nullable=True)
     scopes = Column(JSON, nullable=False, default=list)
     is_enabled = Column(Boolean, nullable=False, default=True)
+    group_role = Column(String, nullable=False, default="human_workspace")
+    owner_user_id = Column(String, nullable=True)
+    is_exportable = Column(Boolean, nullable=False, default=True)
+    sync_locked_by = Column(String, nullable=True)
+    sync_locked_until = Column(DateTime, nullable=True)
 
     # ✅ incremental sync cursor (Hypothesis `updated` string)
     last_synced_updated = Column(String, nullable=True)
@@ -109,6 +157,11 @@ class HypothesisAnnotation(Base):
     suffix = Column(Text, nullable=True)
 
     raw = Column(JSON, nullable=False, default=dict)
+    source_type = Column(String, nullable=False, default="human")
+    annotation_status = Column(String, nullable=False, default="synced")
+    workspace_user_id = Column(String, nullable=True)
+    codebook_version = Column(String, nullable=False, default="v1")
+    model_run_id = Column(String, nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

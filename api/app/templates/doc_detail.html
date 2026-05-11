@@ -93,53 +93,6 @@
 {#{% else %}#}
 {#  <span class="pill">In project</span>#}
 {#{% endif %}#}
-{##}
-{##}
-{#    <a class="btnlink" href="{{ back_href }}">Back to Search</a>#}
-{#  <a class="btnlink" href="{{ back_url }}">← Back to search</a>#}
-{##}
-{#  </div>#}
-{#</div>#}
-{##}
-{#    {% if canonical_url %}#}
-{#  <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:10px;">#}
-    {# Model predictions #}
-{#    {% if has_model and hyp_model and hyp_model.hypothesis_incontext %}#}
-{#      <a class="btnlink" href="{{ hyp_model.hypothesis_incontext }}" target="_blank" rel="noopener">#}
-{#        Open Model Predictions (Hypothesis)#}
-{#      </a>#}
-{#    {% else %}#}
-{#      <span class="muted">No model annotations yet</span>#}
-{#    {% endif %}#}
-{##}
-    {# Gold (B1): only show when exists #}
-{#    {% if has_human and hyp_gold and hyp_gold.hypothesis_incontext %}#}
-{#      <a class="btnlink" href="{{ hyp_gold.hypothesis_incontext }}" target="_blank" rel="noopener">#}
-{#        Open Gold Annotations (Hypothesis)#}
-{#      </a>#}
-{#    {% endif %}#}
-{##}
-    {# My workspace #}
-{#    {% if hyp_mine and hyp_mine.hypothesis_incontext %}#}
-{#      <a class="btnlink" href="{{ hyp_mine.hypothesis_incontext }}" target="_blank" rel="noopener">#}
-{#        Open My Annotations (Hypothesis)#}
-{#      </a>#}
-{#    {% else %}#}
-{#      <span class="muted">Workspace not set</span>#}
-{#      <a class="btnlink" href="/ui/settings/hypothesis">Set workspace</a>#}
-{#    {% endif %}#}
-{##}
-{#    <a class="btnlink" href="/ui/settings/hypothesis">Hypothesis workspace</a>#}
-{#  <a class="btnlink" href="/ui/hypothesis/access">Fix Hypothesis access</a>#}
-{##}
-{#  </div>#}
-{##}
-{#{% else %}#}
-{#  <div class="muted" style="margin-top:10px;">#}
-{#    No canonical URL — can’t open Hypothesis for this document.#}
-{#  </div>#}
-{#{% endif %}#}
-
 {# ---------------- Header + Annotation Actions ---------------- #}
 
 {% set _hm = doc.get("has_model_b") %}
@@ -148,10 +101,9 @@
 {% set _hh = doc.get("has_human_b") %}
 {% set has_human = (_hh[0] if _hh is iterable and _hh is not string else _hh) or false %}
 
-<div class="row" style="align-items:flex-start; justify-content:space-between; gap:20px; flex-wrap:wrap;">
+<div>
 
-  <!-- LEFT: Document Info -->
-  <div style="min-width:260px;">
+  <div>
     <h1 class="mono" style="margin:0 0 4px 0;">{{ doc_id[:8] }}</h1>
     <div class="muted" style="font-size:12px;">
       Document ID hidden (shows first 8 chars).&nbsp;
@@ -175,67 +127,34 @@
     </div>
   </div>
 
-  <!-- RIGHT: Annotation Controls -->
-  <div style="min-width:280px; flex:1; max-width:920px;">
-
-<div class="card" style="border-left:4px solid #dc2626; background:#fff5f5;">
-  <h3 style="color:#b91c1c;">⚠️ Check your Hypothesis group before annotating</h3>
-
-  <p style="color:#7f1d1d;">
-    Use the Model Predictions group only to view model annotations.
-    Do not add replies or new annotations there.
-  </p>
-
-  <p style="color:#7f1d1d;">
-    For your own review work, switch to your personal workspace group in the Hypothesis sidebar.
-  </p>
-</div>
-
-    {% if canonical_url and hyp_model and hyp_model.hypothesis_incontext %}
+    {% if canonical_url %}
       <div class="card" style="margin:0; padding:14px;">
-        <div class="muted" style="font-size:12px; margin-bottom:6px;">Annotations</div>
+        <div class="muted" style="font-size:12px; margin-bottom:6px;">Human-in-the-loop review</div>
 
         <div class="row" style="gap:10px; flex-wrap:wrap;">
-          <a class="btnlink"
-             href="{{ hyp_model.hypothesis_incontext }}"
-             target="_blank"
-             rel="noopener"
-             style="font-weight:600;">
-            Open Model Annotations
+          <a class="btnlink" href="{{ canonical_url }}" target="_blank" rel="noopener" style="font-weight:600;">
+            Open Document
           </a>
 
-          {% if has_human and hyp_gold and hyp_gold.hypothesis_incontext %}
-            <a class="btnlink"
-               href="{{ hyp_gold.hypothesis_incontext }}"
-               target="_blank"
-               rel="noopener">
-              Gold
-            </a>
-          {% endif %}
-
-          {% if hyp_mine and hyp_mine.hypothesis_incontext %}
-            <a class="btnlink"
-               href="{{ hyp_mine.hypothesis_incontext }}"
-               target="_blank"
-               rel="noopener">
-              My Annotations
+          {% if workspace_group %}
+            <a class="btnlink" href="/ui/hypothesis/sync_workspace">Sync Review Group</a>
+            <a class="btnlink" href="https://hypothes.is/groups/{{ workspace_group.group_id }}" target="_blank" rel="noopener">
+              Open Review Group
             </a>
           {% else %}
-            <a class="btnlink" href="/ui/settings/hypothesis">
-              Set My Workspace
-            </a>
+            <a class="btnlink" href="/ui/settings/hypothesis" style="font-weight:600;">Set Review Group</a>
           {% endif %}
 
-          <a class="btnlink" href="/ui/hypothesis/access">
-            Fix access
-          </a>
+          <a class="btnlink" href="/ui/hypothesis/access">Help</a>
         </div>
 
-        {% if not has_model %}
-          <div class="muted" style="font-size:12px; margin-top:8px;">
-            No model predictions available yet.
-          </div>
-        {% endif %}
+        <div class="muted" style="font-size:12px; margin-top:8px;">
+          Open the document, activate the Hypothesis browser extension or bookmarklet, then select
+          <strong>{{ workspace_group.name if workspace_group else "the selected review group" }}</strong>.
+          {% if workspace_group and workspace_group.last_synced_at %}
+            Last synced {{ workspace_group.last_synced_at }}.
+          {% endif %}
+        </div>
       </div>
     {% else %}
       <div class="card" style="margin:0; padding:14px;">
@@ -244,7 +163,7 @@
         </div>
         <div class="row" style="gap:10px; flex-wrap:wrap; margin-top:10px;">
           <a class="btnlink" href="/ui/hypothesis/access">Fix access</a>
-          <a class="btnlink" href="/ui/settings/hypothesis">Set My Workspace</a>
+          <a class="btnlink" href="/ui/settings/hypothesis">Set Review Group</a>
         </div>
       </div>
     {% endif %}
@@ -262,20 +181,6 @@
 
       <a class="btnlink" href="{{ back_url }}">← Back to search</a>
     </div>
-
-  </div>
-</div>
-
-
-<h2 style="margin-top:10px;">
-  {{ title if title else "(no title)" }}
-</h2>
-
-<div class="meta">
-  {% if source %}<span class="pill">source: {{ source }}</span>{% endif %}
-  {% if doc_type %}<span class="pill">type: {{ doc_type }}</span>{% endif %}
-  {% if published %}<span class="pill">published: <span class="mono">{{ published }}</span></span>{% endif %}
-  {% if canonical_url %}<span class="pill">has url</span>{% endif %}
 </div>
 
 {% if excerpt %}

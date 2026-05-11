@@ -1,870 +1,388 @@
 {% extends "base.html" %}
 {% block content %}
+
 <h1>Help</h1>
 
 <div class="card">
-  <h2>Welcome</h2>
+  <h2>What the JuDDGES HiTL Tool Does</h2>
   <p class="muted">
-    This workspace helps you review, organise, and extract information from legal documents. It brings together
-    the main platform and the Hypothesis annotation tool so that you can search for documents, open them,
-    review suggested coding, and export results in a structured format.
+    The JuDDGES HiTL Tool helps researchers search, review, annotate, and extract structured data from appeal
+    court judgments. The current local corpus contains 6,154 dated judgments from the Court of Appeal
+    (Criminal Division) in England and Wales, dated from 4 January 2003 to 22 May 2024.
   </p>
   <p class="muted">
-    This guide explains what each part of the workspace is for,
-    what to do step by step, and what to expect when using Hypothesis alongside the platform.
-    Where technical details are not needed for day-to-day work, they have been kept to a minimum.
+    The tool supports open science by making the coding process transparent. You can inspect source documents,
+    see the coding scheme, compare human and model coding where available, review model suggestions, and export
+    the data used in your own project.
   </p>
   <div class="meta">
-    <span class="pill">Audience: Reviewers, Researchers, Admins</span>
-    <span class="pill">Main tools: Workspace + Hypothesis</span>
-    <span class="pill">Main workflow: Select project → Search → Open → Review → Export</span>
+    <span class="pill">Corpus: 6,154 dated judgments</span>
+    <span class="pill">Base coding scheme: 43 variables</span>
+    <span class="pill">Main workflow: Project -> Search -> Review -> Extract</span>
   </div>
 </div>
 
 <div class="card">
-  <h2>What this platform is for</h2>
+  <h2>Two Ways to Use This Guide</h2>
   <p class="muted">
-    The platform supports a review process in which documents are collected into projects and coded using a
-    structured coding scheme. In many cases, the system may already show suggested values or model-generated
-    coding. A reviewer then checks these suggestions, confirms them, corrects them, or rejects them.
-  </p>
-  <p class="muted">
-    In simple terms, the platform helps you do four things:
+    The instructions below are written for two common users.
   </p>
   <ol>
-    <li><b>Organise documents into projects</b> so that each piece of work is grouped clearly.</li>
-    <li><b>Search and open documents</b> to inspect the text and any extracted information.</li>
-    <li><b>Review coding</b> in Hypothesis, especially where model suggestions need checking.</li>
-    <li><b>Export the coded data</b> for analysis in Excel, SPSS, Word, or other tools.</li>
+    <li>
+      <b>Project creators</b> create a project, search for documents, add documents to the project, and extract
+      the data they need.
+    </li>
+    <li>
+      <b>Project reviewers</b> join an existing project, review documents, and use the Hypothesis Tool when the
+      project uses human-in-the-loop review.
+    </li>
   </ol>
-</div>
-
-<div class="card">
-  <h2>How to Use the Workspace</h2>
-  <p class="muted">
-    For most users, this is the most important section. The usual workflow is described below.
-  </p>
-
-  <h3>1) Select a Project</h3>
-  <p class="muted">
-    Before doing anything else, make sure you have selected the correct project. The selected project becomes
-    your active workspace. Searches, document selection, coding activity, and exports will usually relate to
-    the active project.
-  </p>
-  <p class="muted">
-    If the wrong project is selected, you may still be able to search and open documents, but the results,
-    exports, or saved actions may not relate to the project you intended to work on.
-  </p>
-
-  <h3>2) Search Documents</h3>
-  <p class="muted">
-    Use <b>Search Documents</b> to find cases within the available corpus. Depending on your setup, you may be
-    able to search by keyword, code, topic, coding source, or other filters.
-  </p>
-  <p class="muted">
-    The purpose of this page is to narrow down the document set to the cases you want to inspect. Search results
-    may also reflect coding or extracted values already available for those documents.
-  </p>
-
-  <h3>3) Open a Document</h3>
-  <p class="muted">
-    When you open a document, you will usually see its citation, an excerpt or the document text, and any
-    extracted code values currently available for that document. These are not always the same across documents.
-    Some documents will show many extracted values, while others will show fewer.
-  </p>
-  <p class="muted">
-    If the document is part of a review workflow, this is also the point at which you may switch to Hypothesis
-    to inspect and review annotations more closely.
-  </p>
-
-  <h3>4) Add Documents to a Project</h3>
-  <p class="muted">
-    If you find a document that should be part of the current project, use <b>Add to Project</b>. This links
-    the document to the project so it can be included in project-level review and export workflows.
-  </p>
-  <p class="muted">
-    Adding a document to a project does not usually mean the document has already been fully reviewed.
-    It simply means that it is now part of that project’s working set.
-  </p>
-
-  <h3>5) Review Coding</h3>
-  <p class="muted">
-    The platform may contain human-reviewed values, AI/model-suggested values, or both. In many workflows,
-    the next step after opening a document is to review the coding evidence in Hypothesis and decide whether
-    the current suggestions are correct.
-  </p>
-  <p class="muted">
-    This is especially important when the system has proposed a coding value but a reviewer needs to confirm
-    whether the value is supported by the document text.
-  </p>
-
-  <h3>6) Export Data</h3>
-  <p class="muted">
-    Once documents have been reviewed and added to a project, you can export the extracted coding data.
-    The export page allows you to choose the coding version, coding source, and export format.
-  </p>
-  <p class="muted">
-    This is useful when you want to analyse results outside the platform or share them with others.
-  </p>
-</div>
-
-<div class="card">
-  <h2>Quick Start</h2>
-  <p class="muted">
-    If you are new to the platform, follow these steps in order.
-  </p>
-  <ol>
-    <li><b>Open the workspace</b> and make sure you are signed in.</li>
-    <li><b>Select the correct project</b> from the project area.</li>
-    <li><b>Open Search Documents</b> and locate a case you want to review.</li>
-    <li><b>Open the document</b> and read the excerpt or case text.</li>
-    <li><b>Open Hypothesis</b> if annotation review is required.</li>
-    <li><b>Check the coding</b>: accept, reject, or correct values where needed.</li>
-    <li><b>Return to the workspace</b> and continue with the next document.</li>
-    <li><b>Export data</b> when you are ready to analyse or share the results.</li>
-  </ol>
-
   <div class="alert">
-    <b>Important:</b> If you cannot see annotations in Hypothesis, the most common reason is that the wrong
-    Hypothesis group is selected. Make sure you are working in the correct group rather than “Public”, then
-    refresh the page if needed.
+    Demo 1 covers normal project, search, coding scheme, and export use. Demo 2 covers the Hypothesis Tool and
+    human-in-the-loop review.
   </div>
 </div>
 
 <div class="card">
-  <h2>Understanding the Main Areas of the Platform</h2>
-
-  <h3>Dashboard / Home</h3>
+  <h2>Before You Start</h2>
+  <ol>
+    <li>Open the JuDDGES Tool at <a href="https://juddges.org/" target="_blank" rel="noopener">https://juddges.org/</a>.</li>
+    <li>Create an account with your email address and your own password, or log in if you already have an account.</li>
+    <li>Use the top navigation bar to move between <b>JuDDGES</b>, <b>My Projects</b>, <b>Coding Scheme</b>, <b>Search Documents</b>, <b>Extract Data</b>, <b>Help</b>, and <b>Hypothesis Tool</b>.</li>
+  </ol>
   <p class="muted">
-    The dashboard is the main starting point. It usually shows the active project, links to key actions,
-    and shortcuts to areas such as search, projects, coding scheme, and exports.
-  </p>
-
-  <h3>Projects</h3>
-  <p class="muted">
-    Projects group together the documents you are working on. A project may represent a dataset, a coding task,
-    a research question, or a review batch. Working within the correct project helps keep all related documents,
-    coding, and exports together.
-  </p>
-
-  <h3>Search Documents</h3>
-  <p class="muted">
-    This is where you locate cases. Some filters may reflect the coding already available for the current search
-    results. For example, code dropdowns may show only codes present in the currently filtered result set.
-  </p>
-
-  <h3>Coding Scheme</h3>
-  <p class="muted">
-    The Coding Scheme explains what each code means, what kind of information it is supposed to capture,
-    and examples of how it may be filled. This is the reference area users should consult when unsure how to
-    interpret or apply a code.
-  </p>
-
-  <h3>Extract Data</h3>
-  <p class="muted">
-    This area allows you to export structured coding data. You may see options for different versions,
-    coding sources, and export formats such as Long CSV and Wide CSV.
-  </p>
-</div>
-
-{#<div class="card">#}
-{#  <h2>Using Hypothesis for Review</h2>#}
-{#  <p class="muted">#}
-{#    Hypothesis is the annotation tool used alongside the platform. Reviewers use it to inspect highlighted text,#}
-{#    review model suggestions, and respond where a value needs confirmation or correction.#}
-{#  </p>#}
-{#  <p class="muted">#}
-{#    You do not need to understand the technical setup behind Hypothesis in order to use it. What matters most is#}
-{#    knowing how to open it, how to identify the correct group, and how to reply to model annotations appropriately.#}
-{#  </p>#}
-{##}
-{#  <h3>What you may see in Hypothesis</h3>#}
-{#  <ul>#}
-{#    <li><b>Highlighted text</b> where the system has identified a likely relevant passage in the document.</li>#}
-{#    <li><b>Notes without highlights</b> where the system could not reliably anchor the value to a precise quote.</li>#}
-{#    <li><b>Model-generated annotations</b> that are intended for review rather than automatic acceptance.</li>#}
-{#    <li><b>Human replies</b> showing confirmation, rejection, correction, or discussion.</li>#}
-{#  </ul>#}
-{##}
-{#  <h3>How to identify model annotations</h3>#}
-{#  <p class="muted">#}
-{#    Model annotations may be marked by tags or wording that indicate they were created by the system rather than#}
-{#    by a human reviewer. These markers help distinguish proposed values from reviewed values.#}
-{#  </p>#}
-{#  <p class="muted">#}
-{#    Depending on your setup, these may include visible tags such as source labels, model tags, run identifiers,#}
-{#    or field names. The exact appearance may vary slightly by deployment, but the purpose is the same:#}
-{#    to make it clear what has been suggested by the system and what still needs human review.#}
-{#  </p>#}
-{##}
-{#  <div class="alert">#}
-{#    <b>Remember:</b> A model annotation is usually a suggestion for review, not a final decision.#}
-{#    Reviewers should still check the underlying text before confirming it.#}
-{#  </div>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>How to Review Model Annotations</h2>#}
-{#  <p class="muted">#}
-{#    The review process is designed to be simple and consistent. A reviewer’s job is to assess whether the#}
-{#    suggested value is supported by the document and, if not, to correct it clearly.#}
-{#  </p>#}
-{##}
-{#  <h3>Recommended review process</h3>#}
-{#  <ol>#}
-{#    <li>Open the document from the workspace.</li>#}
-{#    <li>Open the Hypothesis sidebar and confirm you are in the correct group.</li>#}
-{#    <li>Read the model annotation and the highlighted text (if present).</li>#}
-{#    <li>Compare the suggested value against the document text.</li>#}
-{#    <li>Decide whether the suggestion is correct, incorrect, incomplete, or unclear.</li>#}
-{#    <li>Reply appropriately using the agreed review approach for your team.</li>#}
-{#  </ol>#}
-{##}
-{#  <h3>Typical review outcomes</h3>#}
-{#  <table class="table">#}
-{#    <thead>#}
-{#      <tr>#}
-{#        <th>Outcome</th>#}
-{#        <th>Meaning</th>#}
-{#        <th>Typical reviewer action</th>#}
-{#      </tr>#}
-{#    </thead>#}
-{#    <tbody>#}
-{#      <tr>#}
-{#        <td><b>Accept</b></td>#}
-{#        <td>The suggestion is correct.</td>#}
-{#        <td>Confirm it in the thread using your team’s preferred review wording or tags.</td>#}
-{#      </tr>#}
-{#      <tr>#}
-{#        <td><b>Reject</b></td>#}
-{#        <td>The suggestion is not correct.</td>#}
-{#        <td>Explain what is wrong and, where possible, provide the corrected value.</td>#}
-{#      </tr>#}
-{#      <tr>#}
-{#        <td><b>Correct</b></td>#}
-{#        <td>The idea is close, but the value needs amending.</td>#}
-{#        <td>Reply with the corrected value and add a better highlight if needed.</td>#}
-{#      </tr>#}
-{#      <tr>#}
-{#        <td><b>Discuss</b></td>#}
-{#        <td>The case is unclear or needs a second opinion.</td>#}
-{#        <td>Reply in the thread so that the issue is visible to other reviewers or admins.</td>#}
-{#      </tr>#}
-{#    </tbody>#}
-{#  </table>#}
-{##}
-{#  <h3>Good reviewing habits</h3>#}
-{#  <ul>#}
-{#    <li>Always check the underlying text rather than relying only on the suggested label.</li>#}
-{#    <li>Use clear replies so another reviewer can understand your reasoning later.</li>#}
-{#    <li>Where possible, keep discussion attached to the same annotation thread.</li>#}
-{#    <li>Create a new annotation only if the existing one does not capture the right evidence.</li>#}
-{#  </ul>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>What happens to older or rejected model annotations</h2>#}
-{#  <p class="muted">#}
-{#    In some workflows, the platform keeps Hypothesis tidy by showing only the latest model run while preserving#}
-{#    a fuller audit trail elsewhere in the system. This helps reviewers focus on the current state of the work#}
-{#    rather than being distracted by outdated suggestions.#}
-{#  </p>#}
-{#  <ul>#}
-{#    <li>Older model suggestions may be removed from view in Hypothesis.</li>#}
-{#    <li>Rejected model suggestions may be cleaned up after review.</li>#}
-{#    <li>Human comments and review history are still important for traceability.</li>#}
-{#  </ul>#}
-{#  <p class="muted">#}
-{#    The key point for reviewers is that not every historical model suggestion needs to remain visible in the#}
-{#    annotation layer for the system to retain an audit trail overall.#}
-{#  </p>#}
-{#</div>#}
-
-    <div class="card">
-  <h2>Using Hypothesis for Review</h2>
-
-  <p>
-    Hypothesis is the annotation tool used alongside the platform. Reviewers use it to inspect highlighted text,
-    review model suggestions, and respond where a value needs confirmation or correction.
-  </p>
-
-  <p>
-    You do not need to understand the technical setup behind Hypothesis in order to use it.
-    What matters most is knowing how to open it, how to identify the correct group,
-    and how to reply to model annotations appropriately.
-  </p>
-</div>
-
-<div class="card" style="border:2px solid #dc2626; background:#fff5f5;">
-  <h2 style="color:#b91c1c;">⚠️ Critical rule: do not write in the Model Predictions group</h2>
-
-  <p style="color:#7f1d1d;">
-    The Model Predictions group is for viewing model-generated annotations only.
-    Reviewers must not create annotations, edit annotations, delete annotations, or reply to threads in this group.
-  </p>
-
-  <p style="color:#7f1d1d;">
-    All human review work must be done in your assigned personal workspace group.
-    Writing in the Model Predictions group may contaminate the model annotation layer and affect later syncing,
-    review, and data extraction.
+    The JuDDGES homepage gives background information about the Judicial Decision Data Gathering, Encoding and
+    Sharing project, the purpose of the tool, who it was developed for, and the research outputs that underpin
+    the tool. The project is designed around open science principles, so the underlying data, code, and research
+    outputs can be cited and checked.
   </p>
 </div>
 
 <div class="card">
-  <h2>What you may see in Hypothesis</h2>
+  <h2>Demo 1: Basic Use of the Tool</h2>
 
+  <h3>1. My Projects</h3>
+  <p class="muted">
+    Use <b>My Projects</b> to create, select, inspect, edit, or delete your projects. A project is the workspace
+    where you collect the documents you want to study.
+  </p>
+  <ol>
+    <li>Click <b>Create project</b>.</li>
+    <li>Give the project a clear title.</li>
+    <li>Add a short description so you and other researchers know what the project is about.</li>
+    <li>After creating the project, the tool takes you to <b>Search Documents</b>.</li>
+  </ol>
+  <p class="muted">
+    If you already have a project, choose <b>Select project</b> or <b>Use project</b>. This makes the project
+    active, so searches, added documents, review work, and exports relate to the right project.
+  </p>
+  <p class="muted">
+    <b>People and Projects</b> shows who else is using the tool and what their projects are about. This supports
+    open science by helping researchers find related work and contact each other about collaboration or data
+    sharing.
+  </p>
+
+  <h3>2. Coding Scheme</h3>
+  <p class="muted">
+    Before searching, it is useful to look at the <b>Coding Scheme</b>. This page shows the 43 variables that
+    the tool was originally trained to extract.
+  </p>
+  <p class="muted">
+    Click <b>View guidance</b> for a code to see its description, possible values, and examples of how those
+    values may appear in an appeal judgment. For normal Demo 1 use, you can ignore the show or hide inactive
+    option.
+  </p>
+
+  <h3>3. Search Documents</h3>
+  <p class="muted">
+    Use <b>Search Documents</b> to find judgments. You can type a keyword or phrase, such as burglary, remanded
+    into custody, plea, sentence, or appeal ground. You can also choose where to search, such as everywhere.
+  </p>
+  <p class="muted">
+    You can narrow results by project, by coding source, and by whether a document contains a specific code.
+    This means you can search for a keyword and also require that the document contains a selected code.
+  </p>
+  <div class="alert">
+    Current local counts: 649 documents have human coding, 6,154 have model coding, 649 have both human and
+    model coding, and 5,505 are model-only. There is also one Solr demo/index record that is not part of the
+    dated judgment corpus.
+  </div>
+  <p class="muted">
+    Search results show the number of matching documents and links for opening them. Use <b>Add all results</b>
+    only when you are sure the whole result set belongs in your project.
+  </p>
+
+  <h3>4. Open a Document</h3>
+  <p class="muted">
+    When you open a document, you see its citation, an excerpt or document text, and the codes currently
+    available for that document. Not every document contains every code. Some documents may have no value for a
+    code because the information is not present or the model was not confident enough to extract it.
+  </p>
+  <p class="muted">
+    Use <b>Show details</b> on a code to see whether the value came from human coding, model coding, or both.
+    If human and model coding disagree, the tool flags this. The agreement test is deliberately strict because
+    it can require the same raw evidence span. You should inspect the text and decide whether the disagreement
+    matters for your research.
+  </p>
+  <p class="muted">
+    This is an open science feature: it lets you see the evidence behind the coding, compare human and model
+    outputs, and make your own judgement about whether the coding is good enough for your purpose.
+  </p>
+
+  <h3>5. Add Documents to a Project</h3>
+  <p class="muted">
+    Click <b>Add to Project</b> when a document should be included in your active project. You can then return
+    to <b>My Projects</b> to see the documents in that project.
+  </p>
+
+  <h3>6. Extract Data</h3>
+  <p class="muted">
+    When you are satisfied with the documents in your project, go to <b>Extract Data</b>. Choose the codes,
+    coding source, and CSV format you need.
+  </p>
   <ul>
-    <li>Highlighted text where the system has identified a likely relevant passage in the document.</li>
-    <li>Notes without highlights where the system could not reliably anchor the value to a precise quote.</li>
-    <li>Model-generated annotations that are intended for review rather than automatic acceptance.</li>
-    <li>Human replies showing confirmation, rejection, correction, or discussion.</li>
+    <li><b>Long CSV</b> gives one row per document-code pair. This is best for checking details.</li>
+    <li><b>Wide CSV</b> gives one row per document, with codes as columns. This is usually best for spreadsheet analysis.</li>
+    <li><b>Final reviewed dataset</b> is the normal HiTL export: human corrections first, then gold references, then unchanged model suggestions.</li>
   </ul>
 </div>
 
 <div class="card">
-  <h2>How to identify model annotations</h2>
-
-  <p>
-    Model annotations may be marked by tags or wording that indicate they were created by the system rather than by a human reviewer.
-    These markers help distinguish proposed values from reviewed values.
+  <h2>Demo 2: Human-in-the-Loop Review with Hypothesis</h2>
+  <p class="muted">
+    Human-in-the-loop review means researchers work with model suggestions instead of simply accepting them.
+    The model can suggest values, but people check the evidence, reject wrong suggestions, correct incomplete
+    values, and add missing annotations.
   </p>
-
-  <p>
-    Depending on your setup, these may include visible tags such as source labels, model tags, run identifiers, or field names.
-    The exact appearance may vary slightly by deployment, but the purpose is the same:
-    to make it clear what has been suggested by the system and what still needs human review.
-  </p>
-
-  <p>
-    <strong>Remember:</strong> a model annotation is usually a suggestion for review, not a final decision.
-    Reviewers should always check the underlying text before confirming it.
+  <p class="muted">
+    In the JuDDGES workflow, Hypothesis is used as the annotation layer. The app copies model suggestions into a
+    shared review group. Reviewers work in that group, and the app syncs trusted reviewer annotations back into
+    the server-side reviewed dataset for the selected project.
   </p>
 </div>
 
 <div class="card">
-  <h2>How to review model annotations</h2>
-
-  <p>
-    The review process is designed to be simple and consistent. A reviewer’s job is to assess whether the suggested value is supported by the document and, if not, to correct it clearly.
+  <h2>Install and Control Hypothesis</h2>
+  <p class="muted">
+    Hypothesis is a browser extension. Use it only in the selected review group for your project.
   </p>
-
   <ol>
-    <li>Open the document from the workspace.</li>
-    <li>Open the Hypothesis sidebar.</li>
-    <li>Use the Model Predictions group only to inspect model suggestions.</li>
-    <li>Switch to your personal workspace group before adding any reply, annotation, correction, or discussion.</li>
-    <li>Read the model annotation and the highlighted text, if present.</li>
-    <li>Compare the suggested value against the document text.</li>
-    <li>Decide whether the suggestion is correct, incorrect, incomplete, or unclear.</li>
-    <li>Record your review in your personal workspace group using the agreed review approach for your team.</li>
+    <li>Use Chrome. If you do not have it, install it from <a href="https://www.google.com/intl/en_uk/chrome/" target="_blank" rel="noopener">Google Chrome</a>.</li>
+    <li>Create a guest Chrome profile or a separate Chrome profile for this work. This keeps the review environment separate from your personal or work accounts.</li>
+    <li>Install the Hypothesis extension from <a href="https://chromewebstore.google.com/detail/hypothesis-web-pdf-annota/bjfhmglciegochdpefhhlphglcehbmek" target="_blank" rel="noopener">the Chrome Web Store</a>.</li>
+    <li>If Chrome asks whether the extension can read and change site data, allow it so Hypothesis can annotate web pages.</li>
+    <li>For better control, open Chrome Extensions, choose Hypothesis, open site access settings, and choose <b>When you click the extension</b>.</li>
   </ol>
+  <div class="alert">
+    The separate Chrome profile and the "When you click the extension" setting help keep Hypothesis active only
+    when you choose to use it.
+  </div>
 </div>
 
 <div class="card">
-  <h2>Typical review outcomes</h2>
+  <h2>Join a Review Group and Request Access</h2>
+  <ol>
+    <li>Open <b>Hypothesis Tool</b> in the top navigation bar.</li>
+    <li>Click <b>Join / Open Review Group</b> and join the shared Hypothesis group. Most projects use the same shared group; restricted projects may use a separate group.</li>
+    <li>Return to the tool and click <b>Request / Manage Review Access</b>.</li>
+    <li>Enter your Hypothesis username and submit the request.</li>
+    <li>An admin approves or blocks the request in the <b>Reviewer access</b> panel.</li>
+  </ol>
+  <p class="muted">
+    You can find your Hypothesis username in your Hypothesis account or profile. You only need to enter the
+    username, for example <span class="mono">alice</span>. The app stores it in the form
+    <span class="mono">acct:alice@hypothes.is</span>.
+  </p>
+  <div class="alert">
+    Joining the Hypothesis group is not the same as being trusted by the JuDDGES Tool. The server imports human
+    review annotations only from approved reviewers for that shared review group. Pending, blocked, and unknown
+    Hypothesis accounts are ignored during sync.
+  </div>
+</div>
 
+<div class="card">
+  <h2>Reviewer Workflow: What To Do Each Time</h2>
+  <p class="muted">
+    This is the normal order for reviewers working on an existing HiTL project.
+  </p>
+  <ol>
+    <li><b>Select the project</b> in <b>My Projects</b>. The project name should appear in the top bar.</li>
+    <li><b>Open Hypothesis Tool</b> and join the shared review group if you have not joined it already.</li>
+    <li><b>Request review access</b> with your Hypothesis username. Wait until an admin approves you.</li>
+    <li><b>Open a document</b> from <b>Search Documents</b> or <b>My Projects</b>.</li>
+    <li><b>Turn on Hypothesis</b> in Chrome and choose the project review group in the Hypothesis sidebar.</li>
+    <li><b>Read the model suggestions</b> in the sidebar and compare each suggestion with the judgment text.</li>
+    <li><b>Leave correct suggestions unchanged</b>. You do not need to write "accept".</li>
+    <li><b>Only act when something is wrong, incomplete, or missing</b>.</li>
+    <li><b>Sync the project review group</b> after review work has been added, so the app imports your changes.</li>
+    <li><b>Refresh the document page</b> and check that corrected or new values appear in the code table.</li>
+  </ol>
+  <div class="alert">
+    Most review time should be spent checking evidence, not creating extra comments. Correct suggestions are
+    accepted by doing nothing.
+  </div>
+</div>
+
+<div class="card">
+  <h2>Sync the Project Review Group</h2>
+  <p class="muted">
+    Syncing does two things. First, it prepares the workspace by copying model suggestions and available reference
+    annotations into the shared review group for the selected project's documents. Second, it imports approved
+    reviewer annotations from Hypothesis back into the JuDDGES Tool.
+  </p>
+  <ol>
+    <li>Select the correct project.</li>
+    <li>Open <b>Hypothesis Tool</b>.</li>
+    <li>Open <b>Request / Manage Review Access</b> or <b>Review group settings</b>.</li>
+    <li>Click <b>Sync Project Review Group</b>.</li>
+    <li>Watch the progress messages. The sync is scoped to documents in the selected project.</li>
+  </ol>
+  <p class="muted">
+    The original model and gold source groups are not exposed to reviewers for editing. Suggestions are copied
+    into the review group so reviewers can work safely without corrupting source annotations.
+  </p>
+</div>
+
+<div class="card">
+  <h2>How to Record Review Decisions</h2>
   <table class="table">
     <thead>
       <tr>
-        <th>Outcome</th>
-        <th>Meaning</th>
-        <th>Typical reviewer action</th>
+        <th>Situation</th>
+        <th>What to do</th>
+        <th>What happens in export</th>
       </tr>
     </thead>
     <tbody>
       <tr>
-        <td><strong>Accept</strong></td>
-        <td>The suggestion is correct.</td>
-        <td>Confirm it in your personal workspace using your team’s preferred review wording or tags.</td>
+        <td>The model suggestion is correct</td>
+        <td>Do nothing. Do not add an accept comment.</td>
+        <td>It is treated as an implicit accept.</td>
       </tr>
       <tr>
-        <td><strong>Reject</strong></td>
-        <td>The suggestion is not correct.</td>
-        <td>Explain what is wrong and, where possible, provide the corrected value.</td>
+        <td>The model suggestion is wrong</td>
+        <td>Reply to the model suggestion with <span class="mono">reject</span>, or add the tag <span class="mono">review:reject</span>.</td>
+        <td>The rejected model value is excluded.</td>
       </tr>
       <tr>
-        <td><strong>Correct</strong></td>
-        <td>The idea is close, but the value needs amending.</td>
-        <td>Reply with the corrected value and add a better highlight if needed.</td>
+        <td>The value is close but needs correction</td>
+        <td>Reply to the model suggestion with the corrected value.</td>
+        <td>The human correction takes priority over the model value.</td>
       </tr>
       <tr>
-        <td><strong>Discuss</strong></td>
-        <td>The case is unclear or needs a second opinion.</td>
-        <td>Reply in your personal workspace so the issue is visible to reviewers or admins.</td>
+        <td>The model missed something</td>
+        <td>Highlight the correct text, create a new annotation, enter the value if needed, and add the correct field tag.</td>
+        <td>The new human annotation is included if the reviewer is approved.</td>
       </tr>
     </tbody>
   </table>
+  <p class="muted">
+    For corrections, the easiest and safest method is to reply to the existing model suggestion. The app can then
+    inherit the correct field from the model suggestion. For brand-new annotations, field tags matter. A field tag
+    tells the app which code the annotation belongs to, for example <span class="mono">field:ConvCourtName</span>
+    or <span class="mono">ConvCourtName</span>.
+  </p>
 </div>
 
 <div class="card">
-  <h2>Good reviewing habits</h2>
+  <h2>Examples</h2>
 
+  <h3>If the suggestion is correct</h3>
+  <p class="muted">
+    Model suggestion: <span class="mono">ConvCourtName = Court of Appeal</span>
+  </p>
+  <p class="muted">
+    Reviewer action: do nothing.
+  </p>
+
+  <h3>If the suggestion is wrong</h3>
+  <p class="muted">
+    Open the model suggestion in Hypothesis and reply:
+  </p>
+  <div class="alert mono">reject</div>
+  <p class="muted">
+    The app treats this as a rejection during sync.
+  </p>
+
+  <h3>If the suggestion needs correction</h3>
+  <p class="muted">
+    Open the model suggestion in Hypothesis and reply with the correct value:
+  </p>
+  <div class="alert mono">Northampton Crown Court</div>
+  <p class="muted">
+    The app imports this as the reviewed human value for the same field.
+  </p>
+
+  <h3>If the model missed a value</h3>
+  <ol>
+    <li>Highlight the evidence in the judgment.</li>
+    <li>Click <b>Annotate</b> in Hypothesis.</li>
+    <li>Write the value if the highlighted text alone is not enough.</li>
+    <li>Add the correct field tag, for example <span class="mono">field:SentCourtName</span>.</li>
+    <li>Save the annotation in the project review group.</li>
+  </ol>
+</div>
+
+<div class="card">
+  <h2>Good Review Habits</h2>
   <ul>
-    <li>Always check the underlying text rather than relying only on the suggested label.</li>
-    <li>Check the active Hypothesis group before adding any annotation or reply.</li>
-    <li>Use clear replies so another reviewer can understand your reasoning later.</li>
-    <li>Where possible, keep discussion attached to the same annotation thread in your personal workspace.</li>
-    <li>Create a new annotation only if the existing one does not capture the right evidence.</li>
+    <li>Always check that Hypothesis is using the project review group, not Public.</li>
+    <li>Read the underlying judgment text before accepting, rejecting, or correcting a suggestion.</li>
+    <li>Leave correct suggestions unchanged; do not create unnecessary accept comments.</li>
+    <li>Prefer replying to the model suggestion when rejecting or correcting; this reduces tag mistakes.</li>
+    <li>Use the correct field tag when creating a brand-new annotation.</li>
+    <li>Keep discussion in the same annotation thread where possible.</li>
+    <li>Run sync again before exporting if new review work has been added in Hypothesis.</li>
   </ul>
 </div>
 
 <div class="card">
-  <h2>Keeping your review data synced into the app</h2>
-
-  <p>
-    Human review data is synced into the platform from the approved Hypothesis workspace groups.
-    To make sure your review work is captured correctly:
-  </p>
-
-  <ul>
-    <li>Always annotate in your assigned personal workspace group.</li>
-    <li>Do not annotate in the Model Predictions group.</li>
-    <li>Use consistent tags, values, and review wording agreed by your team.</li>
-    <li>Keep corrections attached to the relevant document and passage where possible.</li>
-    <li>If your personal workspace group is missing from the app, contact an admin before continuing review work.</li>
-  </ul>
-</div>
-
-<div class="card">
-  <h2>What happens to older or rejected model annotations</h2>
-
-  <p>
-    In some workflows, the platform keeps Hypothesis tidy by showing only the latest model run while preserving a fuller audit trail elsewhere in the system.
-    This helps reviewers focus on the current state of the work rather than being distracted by outdated suggestions.
-  </p>
-
-  <ul>
-    <li>Older model suggestions may be removed from view in Hypothesis.</li>
-    <li>Rejected model suggestions may be cleaned up after review.</li>
-    <li>Human comments and review history are still important for traceability.</li>
-  </ul>
-
-  <p>
-    The key point for reviewers is that not every historical model suggestion needs to remain visible in the annotation layer for the system to retain an audit trail overall.
-  </p>
-</div>
-
-
-<div class="card">
-  <h2>Understanding Exports</h2>
-  <p class="muted">
-    The platform supports different export formats because users need the data in different shapes depending on
-    what they are doing next.
-  </p>
-
-  <h3>Long CSV</h3>
-  <p class="muted">
-    Long CSV shows one row per document-code pair. This is the more detailed export. It is useful when you want
-    to inspect the coding carefully, check individual extracted fields, or review how a value appears for a
-    particular document and code combination.
-  </p>
-
-  <h3>Wide CSV</h3>
-  <p class="muted">
-    Wide CSV shows one row per document, with codes spread across columns. This format is usually easier for
-    spreadsheet work and quantitative analysis because each document sits on a single row.
-  </p>
-
-  <h3>Long vs Wide in plain terms</h3>
-  <div class="alert">
-    <b>Long CSV</b> is more detailed and review-friendly.<br>
-    <b>Wide CSV</b> is more analysis-friendly and spreadsheet-friendly.
-  </div>
-
-  <h3>Coding source</h3>
-  <p class="muted">
-    Where available, exports may let you choose whether you want to export human-reviewed coding only,
-    AI/model coding only, or all coding sources. If all coding sources are exported, the output may distinguish
-    clearly between human and model values so the source remains visible.
-  </p>
-</div>
-
-<div class="card">
-  <h2>Roles and Permissions</h2>
-  <table class="table">
-    <thead>
-      <tr>
-        <th>Role</th>
-        <th>What this role usually does</th>
-        <th>Typical limits</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><b>Reviewer</b></td>
-        <td>Searches documents, opens cases, reviews coding, and responds to annotations.</td>
-        <td>Usually cannot perform administrative maintenance or alter others’ permissions.</td>
-      </tr>
-      <tr>
-        <td><b>Admin</b></td>
-        <td>Manages projects, coding workflows, and system operations.</td>
-        <td>Still works within the permissions of the connected tools and services.</td>
-      </tr>
-      <tr>
-        <td><b>Model / Bot</b></td>
-        <td>Creates suggested annotations or coding outputs for human review.</td>
-        <td>Its suggestions should still be reviewed by a person where required.</td>
-      </tr>
-    </tbody>
-  </table>
+  <h2>Admin Checklist for HiTL Projects</h2>
+  <ol>
+    <li>Select the project.</li>
+    <li>Open <b>Hypothesis Tool</b>.</li>
+    <li>Set or confirm the shared project review group.</li>
+    <li>Share the group link with reviewers.</li>
+    <li>Ask reviewers to submit review access requests with their Hypothesis usernames.</li>
+    <li>Approve trusted reviewers for the shared review group and block users who should not contribute to the reviewed dataset.</li>
+    <li>Run <b>Sync Project Review Group</b> to copy suggestions and import approved review annotations.</li>
+    <li>Use <b>Extract Data</b> and choose <b>Final reviewed dataset</b> for the normal HiTL output.</li>
+  </ol>
 </div>
 
 <div class="card">
   <h2>Frequently Asked Questions</h2>
 
-  <h3>I opened a document but I cannot see annotations.</h3>
+  <h3>I cannot see annotations in Hypothesis.</h3>
   <p class="muted">
-    Check that Hypothesis is open and that the correct group is selected. If the group is wrong, the annotations
-    may not appear even though they exist.
+    Check that you have joined the review group, opened the Hypothesis extension, and selected the project review
+    group in the Hypothesis sidebar. Then ask an admin to run sync, or run sync yourself if you have permission.
   </p>
 
-  <h3>Why do some documents show more extracted codes than others?</h3>
+  <h3>I submitted my Hypothesis username. Why are my annotations not imported?</h3>
   <p class="muted">
-    The platform shows the extracted code values available for that specific document. Not every document will
-    contain every code, so the set of visible codes may vary from case to case.
+    Your request may still be pending. An admin must approve your Hypothesis username before your annotations are
+    imported into the reviewed dataset.
   </p>
 
-  <h3>What is the difference between human coding and AI/model coding?</h3>
+  <h3>Should I mark every correct suggestion as accepted?</h3>
   <p class="muted">
-    Human coding refers to values created or confirmed through human review. AI/model coding refers to values
-    proposed by the system. Depending on the workflow, users may review model suggestions before treating them
-    as final.
+    No. Correct model suggestions are accepted implicitly by leaving them unchanged. Only reject, correct, or add
+    annotations where action is needed.
   </p>
 
-  <h3>Why does the code list sometimes change when I change filters in Search Documents?</h3>
+  <h3>What if I type the wrong tag?</h3>
   <p class="muted">
-    Some search filters show codes that are available only in the current filtered result set. If you narrow the
-    results, the available code list may also narrow.
+    The app tries to resolve known aliases, but unknown or mistyped tags may not export correctly. Use the coding
+    scheme and field tags carefully. If possible, reply to an existing model suggestion so the field can be
+    inferred from the suggestion.
   </p>
 
-  <h3>What if I think a coding value is wrong?</h3>
+  <h3>What should I export?</h3>
   <p class="muted">
-    Review the underlying text, then reject or correct the value according to your team’s review process.
-    If needed, raise the issue with an admin or flag it for discussion.
-  </p>
-
-  <h3>Can older model suggestions disappear from Hypothesis?</h3>
-  <p class="muted">
-    Yes. In some setups, the annotation layer is kept tidy so that reviewers see the latest relevant suggestions
-    rather than every historical run.
+    For normal research use after review, choose <b>Final reviewed dataset</b>. Use human-only, gold-only,
+    model-only, or all-source exports only when you are auditing or troubleshooting.
   </p>
 </div>
 
-
 {% endblock %}
-
-{#{% extends "base.html" %}#}
-{#{% block content %}#}
-{#<h1>Help</h1>#}
-{##}
-{#<div class="card">#}
-{#  <h2>Overview</h2>#}
-{#  <p class="muted">#}
-{#    This system supports a Human-in-the-Loop (HITL) annotation workflow where a model generates candidate#}
-{#    annotations and reviewers validate, correct, or reject them using Hypothesis. The platform keeps a full#}
-{#    audit trail in the database while keeping Hypothesis clean and usable by showing the latest model run.#}
-{#  </p>#}
-{##}
-{#  <div class="meta">#}
-{#    <span class="pill">Audience: Reviewers, Admins</span>#}
-{#    <span class="pill">Tools: Dashboard + Hypothesis Extension</span>#}
-{#    <span class="pill">Workflow: Project → Search → Open → Annotate → Sync</span>#}
-{#  </div>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>Quick Start (5 minutes)</h2>#}
-{#  <ol>#}
-{#    <li><b>Install Hypothesis</b>: Install the Hypothesis browser extension.</li>#}
-{#    <li><b>Join the Group</b>: In Hypothesis, join your team group (e.g., <span class="mono">BXp1QL5v</span>).</li>#}
-{#    <li><b>Select a Project</b>: Open <b>Workspace</b> and choose a project.</li>#}
-{#    <li><b>Search Documents</b>: Click <b>Search Documents</b> and open a case.</li>#}
-{#    <li><b>Switch to the Group</b>: In the Hypothesis sidebar, select your group (not “Public”).</li>#}
-{#    <li><b>Review Model Annotations</b>: Reply with accept/reject/corrections using standard tags.</li>#}
-{#  </ol>#}
-{##}
-{#  <div class="alert">#}
-{#    <b>Important:</b> If you don’t see annotations, the most common reason is that Hypothesis is set to the#}
-{#    wrong group (e.g., “Public”). Switch to the correct group and refresh the page.#}
-{#  </div>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>Roles & Permissions</h2>#}
-{#  <table class="table">#}
-{#    <thead>#}
-{#      <tr>#}
-{#        <th>Role</th>#}
-{#        <th>What you can do</th>#}
-{#        <th>What you cannot do</th>#}
-{#      </tr>#}
-{#    </thead>#}
-{#    <tbody>#}
-{#      <tr>#}
-{#        <td><b>Reviewer</b></td>#}
-{#        <td>#}
-{#          Review model annotations, reply with decisions, create new annotations, add tags, correct values.#}
-{#        </td>#}
-{#        <td>#}
-{#          Cannot edit/delete annotations created by others (including the model/bot).#}
-{#        </td>#}
-{#      </tr>#}
-{#      <tr>#}
-{#        <td><b>Admin</b></td>#}
-{#        <td>#}
-{#          Everything a reviewer can do + create projects, manage workflow, run sync/cleanup scripts.#}
-{#        </td>#}
-{#        <td>#}
-{#          Cannot directly change Hypothesis permissions outside group membership rules.#}
-{#        </td>#}
-{#      </tr>#}
-{#      <tr>#}
-{#        <td><b>Model/Bot</b></td>#}
-{#        <td>#}
-{#          Posts model predictions as annotations, removes its own outdated/rejected model annotations.#}
-{#        </td>#}
-{#        <td>#}
-{#          Cannot delete or edit human annotations (enforced by Hypothesis).#}
-{#        </td>#}
-{#      </tr>#}
-{#    </tbody>#}
-{#  </table>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>How to Use the Workspace</h2>#}
-{##}
-{#  <h3>1) Select a Project</h3>#}
-{#  <p class="muted">#}
-{#    Use <b>Select Project</b> to choose which project you are working on. The selected project is your active#}
-{#    workspace for searching, adding documents, and exporting coded data.#}
-{#  </p>#}
-{##}
-{#  <h3>2) Search Documents</h3>#}
-{#  <p class="muted">#}
-{#    Click <b>Search Documents</b> to find documents in the corpus. Use filters such as keywords, topics, or codes#}
-{#    (depending on what your deployment exposes). Open a document to review it and annotate.#}
-{#  </p>#}
-{##}
-{#  <h3>3) Add to Project</h3>#}
-{#  <p class="muted">#}
-{#    Click <b>Add to Project</b> to attach documents to the selected project for review and export workflows.#}
-{#  </p>#}
-{##}
-{#  <h3>4) Extract Coded Data</h3>#}
-{#  <p class="muted">#}
-{#    Click <b>Extract Coded Data</b> to export the project’s extracted variables (codes) into a CSV file for Excel,#}
-{#    Word, or SPSS workflows.#}
-{#  </p>#}
-{##}
-{#  <h3>5) Add Codes</h3>#}
-{#  <p class="muted">#}
-{#    Click <b>Add Codes</b> to add new codes to the schema without contaminating existing codes.#}
-{#  </p>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>How Model Annotations Work in Hypothesis</h2>#}
-{##}
-{#  <h3>What you will see</h3>#}
-{#  <ul>#}
-{#    <li>#}
-{#      <b>Anchored highlights</b>: If the system can reliably find the predicted value in the document text,#}
-{#      it creates a highlight at the exact quote.#}
-{#    </li>#}
-{#    <li>#}
-{#      <b>Unanchored notes</b>: If reliable highlighting isn’t possible, the system posts a page note with a message:#}
-{#      <span class="mono">(Unable to auto-highlight; please review.)</span>#}
-{#    </li>#}
-{#  </ul>#}
-{##}
-{#  <h3>How to identify model annotations</h3>#}
-{#  <p class="muted">#}
-{#    Model annotations are tagged and formatted so you can spot them:#}
-{#  </p>#}
-{##}
-{#  <ul>#}
-{#    <li><b>Prefix</b>: <span class="mono">[MODEL]</span></li>#}
-{#    <li><b>Tags</b> (examples): <span class="mono">source:model</span>, <span class="mono">bot:hitl</span>,#}
-{#      <span class="mono">run:&lt;run_id&gt;</span>, <span class="mono">field:&lt;FieldName&gt;</span></li>#}
-{#  </ul>#}
-{##}
-{#  <div class="alert">#}
-{#    <b>Note about colours:</b> Hypothesis does not support changing highlight colour per annotation via the API.#}
-{#    Highlights are styled by the extension/site theme. (You can still distinguish model outputs via text + tags.)#}
-{#  </div>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>Reviewing Model Annotations (Standard Procedure)</h2>#}
-{##}
-{#  <h3>Step-by-step</h3>#}
-{#  <ol>#}
-{#    <li>Open the document from the dashboard.</li>#}
-{#    <li>Open Hypothesis sidebar and select the project group.</li>#}
-{#    <li>Click a model annotation to see its details.</li>#}
-{#    <li>Decide: Accept, Reject, or Correct.</li>#}
-{#    <li>Reply to the model annotation with the appropriate tags.</li>#}
-{#  </ol>#}
-{##}
-{#  <h3>Standard review tags (recommended)</h3>#}
-{#  <table class="table">#}
-{#    <thead>#}
-{#      <tr>#}
-{#        <th>Action</th>#}
-{#        <th>What to do</th>#}
-{#        <th>Tag(s)</th>#}
-{#      </tr>#}
-{#    </thead>#}
-{#    <tbody>#}
-{#      <tr>#}
-{#        <td><b>Accept</b></td>#}
-{#        <td>Reply “Correct” or brief confirmation</td>#}
-{#        <td><span class="mono">review:accept</span></td>#}
-{#      </tr>#}
-{#      <tr>#}
-{#        <td><b>Reject</b></td>#}
-{#        <td>Reply with the reason and/or corrected value</td>#}
-{#        <td><span class="mono">review:reject</span> (or <span class="mono">review:incorrect</span>)</td>#}
-{#      </tr>#}
-{#      <tr>#}
-{#        <td><b>Correct</b></td>#}
-{#        <td>Reply with the corrected value and optionally create a new annotation highlighting the correct text</td>#}
-{#        <td><span class="mono">review:corrected</span></td>#}
-{#      </tr>#}
-{#      <tr>#}
-{#        <td><b>Needs discussion</b></td>#}
-{#        <td>Reply with the question and tag for follow-up</td>#}
-{#        <td><span class="mono">review:discuss</span></td>#}
-{#      </tr>#}
-{#    </tbody>#}
-{#  </table>#}
-{##}
-{#  <div class="alert">#}
-{#    <b>Best practice:</b> Prefer replying to model annotations (threaded review), and only create a new annotation#}
-{#    when the model missed the evidence or you need to highlight the correct span.#}
-{#  </div>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>Keeping Hypothesis Clean (“Only Latest Run”)</h2>#}
-{#  <p class="muted">#}
-{#    To avoid clutter, the system can keep only the latest model run visible in Hypothesis while storing older runs#}
-{#    in the database for auditing.#}
-{#  </p>#}
-{##}
-{#  <ul>#}
-{#    <li><b>Old model annotations</b> (older <span class="mono">run:...</span>) may be deleted by the bot</li>#}
-{#    <li><b>Safety rule:</b> bot deletes only its own annotations, and only if there are no human replies</li>#}
-{#    <li><b>Rejected annotations</b> can be automatically cleaned up after review</li>#}
-{#  </ul>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>Scripts (Admin / Ops)</h2>#}
-{##}
-{#  <h3>Push model predictions to Hypothesis</h3>#}
-{#  <pre class="mono" style="white-space:pre-wrap">#}
-{#export HYPOTHESIS_API_TOKEN="YOUR_TOKEN"#}
-{##}
-{#python scripts/push_predictions_to_hypothesis_latest.py \#}
-{#  --group "BXp1QL5v" \#}
-{#  --predictions training/runs/your_run/predictions.jsonl \#}
-{#  --normalised data/normalised_data.jsonl \#}
-{#  --sleep 0.15#}
-{#</pre>#}
-{##}
-{#  <h3>Reject cleanup (delete rejected model annotations)</h3>#}
-{#  <pre class="mono" style="white-space:pre-wrap">#}
-{#python scripts/cleanup_rejected_model_annotations.py \#}
-{#  --group "BXp1QL5v" \#}
-{#  --sleep 0.15#}
-{#</pre>#}
-{##}
-{#  <h3>Sync annotations back into the platform (DB + Solr flags)</h3>#}
-{#  <pre class="mono" style="white-space:pre-wrap">#}
-{#python scripts/sync_hypothesis.py --token "$HYPOTHESIS_API_TOKEN" --core hitl_test#}
-{##}
-{## OR streaming sync client against your API#}
-{#python scripts/sync_hypothesis_stream_client.py --api http://localhost:8000 --core hitl_test#}
-{#</pre>#}
-{##}
-{#  <div class="alert">#}
-{#    <b>Operational tip:</b> Run sync on a schedule (e.g., nightly) to keep the dashboard and export outputs aligned#}
-{#    with the latest human reviews.#}
-{#  </div>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>FAQs</h2>#}
-{##}
-{#  <h3>1) I opened the page but I can’t see any annotations.</h3>#}
-{#  <p class="muted">#}
-{#    Make sure you selected the correct group in the Hypothesis sidebar (not “Public”). Refresh the page after switching.#}
-{#  </p>#}
-{##}
-{#  <h3>2) Can we change model highlight colour (e.g., pink)?</h3>#}
-{#  <p class="muted">#}
-{#    Not via Hypothesis API. Highlight colour is controlled by the extension’s styling/theme. Use tags and the#}
-{#    <span class="mono">[MODEL]</span> prefix to distinguish model outputs.#}
-{#  </p>#}
-{##}
-{#  <h3>3) Who can see model annotations?</h3>#}
-{#  <p class="muted">#}
-{#    Anyone who is a member of the Hypothesis group where the model annotations were posted.#}
-{#  </p>#}
-{##}
-{#  <h3>4) Can reviewers delete model annotations?</h3>#}
-{#  <p class="muted">#}
-{#    Typically no. The recommended workflow is: reviewers reply with decisions and the bot deletes its own rejected/outdated annotations.#}
-{#  </p>#}
-{##}
-{#  <h3>5) What happens if two reviewers disagree?</h3>#}
-{#  <p class="muted">#}
-{#    Both can reply to the same model annotation. The thread provides a discussion and audit trail. Your backend can decide#}
-{#    final status based on tags and policy (e.g., admin review, majority, etc.).#}
-{#  </p>#}
-{##}
-{#  <h3>6) Why are some model annotations not highlighted?</h3>#}
-{#  <p class="muted">#}
-{#    Highlighting is only created when the predicted value can be found reliably and uniquely in the document text.#}
-{#    If it is ambiguous or not present as a unique substring, the system posts a page note instead.#}
-{#  </p>#}
-{##}
-{#  <h3>7) Will running the push script multiple times create duplicates?</h3>#}
-{#  <p class="muted">#}
-{#    No. The system uses stable <span class="mono">pred_id:...</span> tags and document/run tags to deduplicate.#}
-{#  </p>#}
-{##}
-{#  <h3>8) Does deleting old model annotations lose audit history?</h3>#}
-{#  <p class="muted">#}
-{#    No. Older runs are stored in your database for auditing. Hypothesis is kept clean by showing only the latest run.#}
-{#  </p>#}
-{##}
-{#  <h3>9) How do I mark an annotation as rejected?</h3>#}
-{#  <p class="muted">#}
-{#    Reply to the model annotation and add tag <span class="mono">review:reject</span> (or <span class="mono">review:incorrect</span>).#}
-{#    The bot cleanup script can remove rejected model annotations later.#}
-{#  </p>#}
-{##}
-{#  <h3>10) Can the bot delete human annotations?</h3>#}
-{#  <p class="muted">#}
-{#    No. Hypothesis enforces ownership. The bot can only delete annotations created by the bot account.#}
-{#  </p>#}
-{#</div>#}
-{##}
-{#<div class="card">#}
-{#  <h2>Suggested Menu Link</h2>#}
-{#  <p class="muted">#}
-{#    Recommended: add a top navigation link to <span class="mono">/ui/docs</span> labeled <b>Documentation</b> or <b>How to Use</b>.#}
-{#    Name the template file something like <span class="mono">docs.html</span> or <span class="mono">how_to_use.html</span>.#}
-{#  </p>#}
-{##}
-{#  <div class="meta">#}
-{#    <span class="pill">Template: templates/docs.html</span>#}
-{#    <span class="pill">Route: /ui/docs</span>#}
-{#    <span class="pill">Nav label: Documentation</span>#}
-{#  </div>#}
-{#</div>#}
-{##}
-{#{% endblock %}#}

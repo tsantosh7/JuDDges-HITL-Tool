@@ -19,7 +19,10 @@ from app.auth.deps import require_paid_user, require_role, require_user
 from app.db import SessionLocal
 
 from sqlalchemy import select, text, func
-from app.models import TopicRun, DocumentTopic, UserHypothesisWorkspace
+from app.models import (
+    TopicRun, DocumentTopic, UserHypothesisWorkspace, HypothesisGroup,
+    ProjectHypothesisReviewGroup,
+)
 from app.models import ProjectDocument  # ensure imported
 
 from fastapi import Request
@@ -191,12 +194,7 @@ async def asgi_delete(
 # Hypothesis helpers (kept if you still use them elsewhere)
 # ============================================================
 def build_hypothesis_incontext(url: str, group_id: str = "__world__") -> str:
-    return (
-        "https://hyp.is/go?url="
-        + urllib.parse.quote(url, safe="")
-        + "&group="
-        + urllib.parse.quote(group_id, safe="")
-    )
+    return build_hypothesis_direct(url, group_id)
 
 
 def build_hypothesis_direct(url: str, group_id: str = "__world__") -> str:
@@ -206,6 +204,57 @@ def build_hypothesis_direct(url: str, group_id: str = "__world__") -> str:
         + "&group="
         + urllib.parse.quote(group_id, safe="")
     )
+
+
+def _parse_hypothesis_group_id(value: str | None) -> str:
+    """
+    Accept a raw Hypothesis group id or a URL such as
+    https://hypothes.is/groups/<group_id>/<slug>.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme or parsed.netloc:
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if len(parts) >= 2 and parts[0] == "groups":
+            return parts[1].strip()
+        return ""
+
+    raw = raw.strip().strip("/")
+    if "/" in raw:
+        parts = [p for p in raw.split("/") if p]
+        if len(parts) >= 2 and parts[0] == "groups":
+            return parts[1].strip()
+        return ""
+    return raw
+
+
+def _default_review_group_id_from_env_or_db() -> str:
+    gid = _parse_hypothesis_group_id(
+        os.getenv("HYPOTHESIS_DEFAULT_REVIEW_GROUP_ID")
+        or os.getenv("HITL_DEFAULT_REVIEW_GROUP_ID")
+        or os.getenv("HYPOTHESIS_SHARED_REVIEW_GROUP_ID")
+        or ""
+    )
+    if gid:
+        return gid
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.execute(
+                select(HypothesisGroup.group_id)
+                .where(HypothesisGroup.group_role == "project_review")
+                .order_by(HypothesisGroup.group_id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        return rows[0] if len(rows) == 1 else ""
+    finally:
+        db.close()
 
 
 # ============================================================
@@ -776,9 +825,6 @@ async def ui_search(
         "include_facets": "1" if start_i == 0 else "0",
     }
 
-    # ✅ ensure Hypothesis links open in model group
-    params["group_id"] = os.getenv("HYPOTHESIS_MODEL_GROUP_ID", "BXp1QL5v")
-
     if scope == "project":
         params["project_id"] = project_id
 
@@ -1058,7 +1104,7 @@ async def ui_export_page(
     request: Request,
     project_id: Optional[UUID] = None,
     version: str = "all",
-    source: str = "all",
+    source: str = "reviewed",
     code: Optional[str] = None,
     include_annotators: Optional[str] = None,
     metric: str = "value",
@@ -1403,23 +1449,26 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
     docs = doc_res.get("docs", []) or []
     doc = docs[0] if docs else {"document_id_s": document_id, "title_txt": ["(not found in Solr)"]}
 
-    MODEL_GID = (os.getenv("HYP_GROUP_MODEL") or "BXp1QL5v").strip()
-    GOLD_GID = (os.getenv("HYP_GROUP_GOLD") or "K48VWwNg").strip()
-  # set this in env
-
-    # find user workspace group id
+    # find project review group id
     db = SessionLocal()
+    workspace_group = None
+    WORK_GID = None
     try:
-        uid = user.get("id") or user.get("user_id") or user.get("sub")
-        w = db.get(UserHypothesisWorkspace, str(uid)) if uid else None
-        WORK_GID = w.group_id if w else None
+        review_row = db.get(ProjectHypothesisReviewGroup, UUID(str(project_id))) if project_id else None
+        WORK_GID = review_row.group_id if review_row else None
+        if WORK_GID:
+            g = db.get(HypothesisGroup, WORK_GID)
+            workspace_group = {
+                "group_id": WORK_GID,
+                "name": (g.name if g else "") or WORK_GID,
+                "is_enabled": bool(g.is_enabled) if g else False,
+                "group_role": (g.group_role if g else "") or "project_review",
+                "last_synced_at": g.last_synced_at.isoformat() if g and g.last_synced_at else "",
+            }
     finally:
         db.close()
 
-
-    # build hypothesis links (only if doc_id exists)
-    hyp_model = await _hyp_link_for_group(MODEL_GID)
-    hyp_gold = await _hyp_link_for_group(GOLD_GID)
+    # Build only the selected review-group link for the UI.
     hyp_mine = await _hyp_link_for_group(WORK_GID)
 
     # ✅ Fast membership check using Postgres (authoritative + instant)
@@ -1456,7 +1505,6 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
         topics = topics_res.get("topics", []) or []
 
     codes_view, code_stats = build_codes_view(doc)
-
     back_url_raw = request.query_params.get("back_url") or request.headers.get("referer")
     back_url = _normalize_back_url(back_url_raw) or f"/ui/search?core={core}"
 
@@ -1479,10 +1527,9 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
             "return_to": return_to,
             "codes_view": codes_view,
             "code_stats": code_stats,
-            "hyp_model": hyp_model,
-            "hyp_gold": hyp_gold,
             "hyp_mine": hyp_mine,
             "workspace_group_id": WORK_GID,
+            "workspace_group": workspace_group,
         },
     )
 
@@ -1664,11 +1711,33 @@ async def ui_create_project(
 #     )
 @router.get("/settings/hypothesis", response_class=HTMLResponse)
 async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_user)):
-    workspace_res = await asgi_get(request, "/hypothesis/workspace", params={})
-    current_gid = workspace_res.get("group_id")
-
     role = (user.get("role") or "").lower()
     is_admin = role == "admin"
+    is_review_manager = is_admin
+    project_id = _get_project_id(request)
+    if not project_id and not is_admin:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    if project_id:
+        workspace_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+        current_gid = workspace_res.get("group_id")
+        is_default_review_group = bool(workspace_res.get("is_default") or (workspace_res.get("group") or {}).get("is_default"))
+    else:
+        current_gid = _default_review_group_id_from_env_or_db()
+        is_default_review_group = bool(current_gid)
+
+    if project_id:
+        reviewers_res = await asgi_get(request, "/hypothesis/project_reviewers", params={"project_id": project_id})
+    elif current_gid:
+        reviewers_res = await asgi_get(request, "/hypothesis/group_reviewers", params={"group_id": current_gid})
+    else:
+        reviewers_res = {"reviewers": []}
+    approved_reviewers = reviewers_res.get("reviewers", []) or []
+
+    all_pending_reviewers = []
+    if is_admin:
+        pending_res = await asgi_get(request, "/hypothesis/project_reviewers/all", params={"status": "pending"})
+        all_pending_reviewers = pending_res.get("reviewers", []) or []
 
     groups = []
 
@@ -1684,6 +1753,24 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
             if g.get("group_id") == current_gid
         ]
 
+    current_group = None
+    if current_gid and not any(g.get("group_id") == current_gid for g in groups):
+        db = SessionLocal()
+        try:
+            g = db.get(HypothesisGroup, current_gid)
+            current_group = {
+                "group_id": current_gid,
+                "name": (g.name if g else "") or current_gid,
+                "is_enabled": bool(g.is_enabled) if g else False,
+                "group_role": (g.group_role if g else "") or "project_review",
+                "last_synced_at": g.last_synced_at.isoformat() if g and g.last_synced_at else "",
+            }
+            groups.insert(0, current_group)
+        finally:
+            db.close()
+    elif current_gid:
+        current_group = next((g for g in groups if g.get("group_id") == current_gid), None)
+
     return request.app.state.templates.TemplateResponse(
         "hypothesis_settings.html",
         {
@@ -1691,7 +1778,14 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
             "user": user,
             "groups": groups,
             "current_gid": current_gid,
+            "current_group": current_group,
+            "is_default_review_group": is_default_review_group,
+            "project_id": project_id,
+            "project_name": _get_project_name(request),
+            "approved_reviewers": approved_reviewers,
+            "all_pending_reviewers": all_pending_reviewers,
             "is_admin": is_admin,
+            "is_review_manager": is_review_manager,
             "message": request.query_params.get("msg"),
         },
     )
@@ -1709,47 +1803,223 @@ async def ui_hypothesis_settings(request: Request, user=Depends(require_paid_use
 @router.post("/settings/hypothesis")
 async def ui_hypothesis_settings_save(
     request: Request,
-    group_id: str = Form(...),
+    group_id: str = Form(""),
+    group_ref: str = Form(""),
     user=Depends(require_paid_user),
 ):
-    role = (user.get("role") or "").lower()
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
 
-    if role != "admin":
+    gid = _parse_hypothesis_group_id(group_ref) or _parse_hypothesis_group_id(group_id)
+    if not gid:
         return RedirectResponse(
-            "/ui/settings/hypothesis?msg=Only%20an%20admin%20can%20change%20workspace%20assignments",
+            "/ui/settings/hypothesis?msg=Enter%20a%20valid%20Hypothesis%20group%20URL%20or%20ID",
             status_code=303,
         )
 
-    gid = (group_id or "").strip()
-    await asgi_post_json(request, "/hypothesis/workspace", {"group_id": gid})
-    return RedirectResponse("/ui/settings/hypothesis?msg=Workspace%20saved", status_code=303)
+    if gid == "__world__":
+        return RedirectResponse(
+            "/ui/settings/hypothesis?msg=Choose%20a%20private%20Hypothesis%20group,%20not%20Public",
+            status_code=303,
+        )
+
+    res = await asgi_post_json(
+        request,
+        "/hypothesis/project_review_group",
+        {"project_id": project_id, "group_id": gid},
+    )
+    if res.get("server_has_access"):
+        msg = "saved"
+    else:
+        msg = urllib.parse.quote(res.get("warning") or "Saved, but the server account cannot access this group yet")
+    return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
+
+
+@router.post("/settings/hypothesis/reviewers")
+async def ui_hypothesis_reviewers_save(
+    request: Request,
+    hypothesis_user: str = Form(""),
+    status: str = Form("active"),
+    reviewer_project_id: str = Form(""),
+    reviewer_group_id: str = Form(""),
+    user=Depends(require_paid_user),
+):
+    role = (user.get("role") or "").lower()
+    if role == "admin" and reviewer_group_id:
+        await asgi_post_json(
+            request,
+            "/hypothesis/group_reviewers",
+            {
+                "group_id": reviewer_group_id,
+                "hypothesis_user": hypothesis_user,
+                "status": status,
+            },
+        )
+        msg_text = "Reviewer list updated"
+        msg = urllib.parse.quote(msg_text)
+        return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
+
+    project_id = reviewer_project_id if role == "admin" and reviewer_project_id else _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    await asgi_post_json(
+        request,
+        "/hypothesis/project_reviewers",
+        {
+            "project_id": project_id,
+            "hypothesis_user": hypothesis_user,
+            "status": status,
+        },
+    )
+    msg_text = "Review access request submitted" if (status or "").strip().lower() == "pending" else "Reviewer list updated"
+    msg = urllib.parse.quote(msg_text)
+    return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
+
+
+@router.get("/hypothesis/sync_workspace", response_class=HTMLResponse)
+async def ui_hypothesis_sync_workspace_page(
+    request: Request,
+    user=Depends(require_paid_user),
+):
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    if not uid:
+        raise HTTPException(401, "Not authenticated")
+
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+    group_id = review_res.get("group_id")
+    if not group_id:
+        return RedirectResponse(
+            "/ui/settings/hypothesis?msg=Set%20the%20project%20review%20group%20first",
+            status_code=303,
+        )
+
+    core = (request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip() or "hitl_test"
+    payload = {
+        "core": core,
+        "group_id": group_id,
+        "project_id": project_id,
+        "all_groups": False,
+        "only_enabled_groups": False,
+        "write_snapshot": True,
+        "limit_per_request": 200,
+        "force_full": False,
+        "include_public": False,
+    }
+    prepare_payload = {
+        "core": core,
+        "group_id": group_id,
+        "project_id": project_id,
+        "include_model": True,
+        "include_gold": True,
+        "max_per_doc": 80,
+    }
+    return request.app.state.templates.TemplateResponse(
+        "hypothesis_sync.html",
+        {
+            "request": request,
+            "user": user,
+            "project_id": project_id,
+            "project_name": _get_project_name(request),
+            "group_id": group_id,
+            "sync_payload": payload,
+            "prepare_payload": prepare_payload,
+        },
+    )
+
+
+@router.post("/hypothesis/sync_workspace")
+async def ui_hypothesis_sync_workspace(
+    request: Request,
+    user=Depends(require_paid_user),
+):
+    uid = user.get("id") or user.get("user_id") or user.get("sub")
+    if not uid:
+        raise HTTPException(401, "Not authenticated")
+
+    core = (request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip() or "hitl_test"
+    project_id = _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+    group_id = review_res.get("group_id")
+    if not group_id:
+        return RedirectResponse(
+            "/ui/settings/hypothesis?msg=Set%20the%20project%20review%20group%20first",
+            status_code=303,
+        )
+
+    await asgi_post_json(
+        request,
+        "/hypothesis/prepare_workspace",
+        {
+            "core": core,
+            "group_id": group_id,
+            "project_id": project_id,
+            "include_model": True,
+            "include_gold": True,
+            "max_per_doc": 80,
+        },
+        timeout_s=300.0,
+    )
+    res = await asgi_post_json(
+        request,
+        "/hypothesis/sync",
+        {
+            "core": core,
+            "group_id": group_id,
+            "project_id": project_id,
+            "all_groups": False,
+            "only_enabled_groups": False,
+            "write_snapshot": True,
+            "limit_per_request": 200,
+            "force_full": False,
+            "include_public": False,
+        },
+        timeout_s=300.0,
+    )
+    seen = int(res.get("annotations_seen") or 0)
+    linked = int(res.get("annotations_linked_to_docs") or 0)
+    msg = urllib.parse.quote(f"Synced project review group: {seen} annotations seen, {linked} linked")
+    return RedirectResponse(f"/ui/settings/hypothesis?msg={msg}", status_code=303)
 
 
 @router.get("/hypothesis/access", response_class=HTMLResponse)
 async def ui_hypothesis_access(request: Request, user=Depends(require_user)):
-    import os
-
-    model_gid = (os.getenv("HYP_GROUP_MODEL") or "BXp1QL5v").strip()
-    gold_gid = (os.getenv("HYP_GROUP_GOLD") or "K48VWwNg").strip()
-
-    # direct group pages (work even without a document URL)
-    model_group_url = f"https://hypothes.is/groups/{model_gid}/model-predictions"
-    gold_group_url = f"https://hypothes.is/groups/{gold_gid}/gold-annotations"
-    model_invite_url = f"https://hypothes.is/groups/{model_gid}/model-predictions"
-
-    # workspace selection page you added earlier
+    project_id = _get_project_id(request)
+    project_name = _get_project_name(request)
     workspace_settings_url = "/ui/settings/hypothesis"
+    review_group = None
+    review_group_id = None
+    review_group_url = None
+
+    if project_id:
+        review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+        review_group_id = review_res.get("group_id")
+        review_group = review_res.get("group")
+        is_default_review_group = bool(review_res.get("is_default") or (review_group or {}).get("is_default"))
+        if review_group_id:
+            review_group_url = f"https://hypothes.is/groups/{review_group_id}"
+    else:
+        is_default_review_group = False
 
     return request.app.state.templates.TemplateResponse(
         "hypothesis_access.html",
         {
             "request": request,
             "user": user,
-            "model_gid": model_gid,
-            "gold_gid": gold_gid,
-            "model_group_url": model_group_url,
-            "gold_group_url": gold_group_url,
-            "model_invite_url": model_invite_url,
+            "project_id": project_id,
+            "project_name": project_name,
+            "review_group": review_group,
+            "review_group_id": review_group_id,
+            "review_group_url": review_group_url,
+            "is_default_review_group": is_default_review_group,
             "workspace_settings_url": workspace_settings_url,
         },
     )
