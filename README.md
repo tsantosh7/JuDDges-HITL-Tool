@@ -1,8 +1,8 @@
-# HITL Tool
+# JuDDGES HiTL Tool
 
-Human-in-the-loop document search, annotation, review, and model-evaluation tooling.
+Open-science human-in-the-loop tooling for searching legal judgments, reviewing model suggestions, collecting Hypothesis annotations, and exporting project-scoped reviewed data.
 
-This repository contains a FastAPI web application backed by Postgres and Solr. It is designed around a shared document corpus: documents are ingested once, indexed for search, grouped into projects, annotated by humans or model outputs, reviewed, and exported for downstream analysis.
+This repository contains a FastAPI web application backed by Postgres and Solr. It is designed around the JuDDGES corpus of appeal court judgments from the Criminal Division of the Court of Appeal of England and Wales. Documents are ingested once, indexed for search, grouped into researcher projects, reviewed with Hypothesis, compared with model outputs, and exported for downstream analysis.
 
 ## What This Project Does
 
@@ -12,9 +12,10 @@ The app supports:
 - Full-text search, filtering, faceting, and random sampling through Solr.
 - User accounts, sessions, access codes, roles, and basic access control.
 - Projects and project document membership.
-- Human annotation workflows through Hypothesis integration.
+- Human-in-the-loop review workflows through Hypothesis integration.
 - Canonical code/tag management, including aliases.
 - Model prediction ingestion and comparison workflows.
+- Shared Hypothesis review groups with approved-reviewer controls.
 - Topic assignment runs with per-document topic labels.
 - FAISS-backed embedding search helpers.
 - CSV/export workflows for analysis.
@@ -84,6 +85,7 @@ Core tables are declared in `api/app/models.py`:
 - `project_documents`: many-to-many project/document membership.
 - `hypothesis_groups`: synced Hypothesis groups.
 - `project_hypothesis_review_groups`: selected shared/project review group per project.
+- `hypothesis_group_reviewers`: approved, pending, or blocked reviewers for a shared review group.
 - `hypothesis_annotations`: synced Hypothesis annotations.
 - `user_hypothesis_workspaces`: legacy per-user review mapping, retained for compatibility.
 - `codes`: canonical code/tag registry.
@@ -116,6 +118,7 @@ The Docker Compose setup defines most local defaults. Important environment vari
 | `DATA_DIR` | Mounted data directory used by scripts and snapshots |
 | `EMBEDDING_MODEL` | Embedding model name |
 | `HYPOTHESIS_API_TOKEN` | Hypothesis API token for sync/push workflows |
+| `HYPOTHESIS_DEFAULT_REVIEW_GROUP_ID` | Default shared Hypothesis review group used by projects without a restricted custom group |
 | `HYPOTHESIS_EXCLUDE_PUBLIC` | Whether to exclude the public Hypothesis group by default |
 | `PUBLIC_BASE_URL` | Public app URL used in emails and links |
 | `ADMIN_EMAIL` | Admin/user-testing contact email |
@@ -289,17 +292,22 @@ Supported flows include:
 
 The session user is stored in the Starlette session cookie. Roles and access plans are enforced by dependencies in `api/app/auth/deps.py`.
 
-## Hypothesis Workflow
+## Human-in-the-Loop Hypothesis Workflow
 
-Hypothesis support is used to sync annotation groups and annotations into the local database and to generate document annotation links.
+Hypothesis is the annotation layer for human-in-the-loop review. The app keeps source model and gold annotations protected, then copies review items into a shared Hypothesis review group where approved reviewers can work.
 
-Relevant workflows:
+The normal workflow is:
 
-- Configure a Hypothesis token through `HYPOTHESIS_API_TOKEN`.
-- Select a shared or project-specific Hypothesis review group for each project.
-- Copy model suggestions and gold references into that review group, tagged by project and document.
-- Sync the selected review group through the API or scripts.
-- Use document links to open Hypothesis in-context annotation views.
+1. Configure the server Hypothesis account with `HYPOTHESIS_API_TOKEN`.
+2. Set `HYPOTHESIS_DEFAULT_REVIEW_GROUP_ID` to the shared private review group, for example `b3DQXoX4`.
+3. Reviewers join the shared Hypothesis group and request access with their Hypothesis username.
+4. Admins approve, block, or leave reviewer requests pending at the review-group level.
+5. For a selected project, sync copies model suggestions and gold references into the shared group only for documents in that project.
+6. Reviewers leave correct suggestions unchanged, reject wrong suggestions, correct incomplete values, or add missing annotations.
+7. Sync imports human review annotations only from approved Hypothesis users and only for documents in the selected project.
+8. Export uses the project scope so researchers can extract reviewed values for their own project without corrupting source model or gold annotations.
+
+The shared group can be reused across many projects. A project-specific restricted Hypothesis group is needed only when a project has separate confidentiality or membership requirements.
 
 Public Hypothesis syncing is guarded by default. The code treats `__world__` as public and excludes it unless explicitly configured otherwise.
 
