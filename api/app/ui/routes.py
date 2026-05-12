@@ -618,6 +618,10 @@ async def ui_search(
     raw_include = request.query_params.getlist("include_codes_topics")
     include_codes_topics = "1" if "1" in raw_include else "0"
 
+    # Topic filter is temporarily hidden on the Search Documents page.
+    # Ignore any stale topic query parameter so results are not filtered invisibly.
+    topic = None
+
     def _as_bool_choice(v: str | None) -> str | None:
         if v is None:
             return None
@@ -937,7 +941,7 @@ async def ui_add_to_project_page(request: Request, user=Depends(require_paid_use
     # project_id = await _ensure_project_selected(request)
     project_id = _get_project_id(request)
     if not project_id:
-       return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+       return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first%20before%20bulk%20import", status_code=303)
 
     return request.app.state.templates.TemplateResponse(
         "add_to_project.html",
@@ -960,7 +964,10 @@ async def ui_add_to_project_post(
     # project_id = await _ensure_project_selected(request)
     project_id = _get_project_id(request)
     if not project_id:
-        return RedirectResponse("/ui/dashboard", status_code=303)
+        return RedirectResponse(
+            "/ui/dashboard?msg=Please%20select%20a%20project%20first%20before%20bulk%20import",
+            status_code=303,
+        )
 
     ids = [x.strip() for x in (document_ids_text or "").splitlines() if x.strip()]
     if not ids:
@@ -1004,7 +1011,7 @@ async def ui_add_search_results_to_project(
     project_id = _get_project_id(request)
     if not project_id:
         return RedirectResponse(
-            "/ui/dashboard?msg=Please%20select%20a%20project%20first",
+            "/ui/dashboard?msg=Please%20select%20a%20project%20first%20before%20bulk%20import",
             status_code=303,
         )
 
@@ -1061,7 +1068,10 @@ async def ui_add_one_from_search(
 
     project_id = _get_project_id(request)
     if not project_id:
-        return RedirectResponse("/ui/dashboard", status_code=303)
+        return RedirectResponse(
+            "/ui/dashboard?msg=Please%20select%20a%20project%20first%20before%20adding%20documents",
+            status_code=303,
+        )
 
     await asgi_post_json(
         request,
@@ -1482,27 +1492,31 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
         finally:
             db.close()
 
-    # Resolve run_id per USER (NO global)
-    uid = user.get("id") or user.get("user_id") or user.get("sub")
-    run_id = _get_run_id(request)
-
-    if not run_id:
-        db = SessionLocal()
-        try:
-            run_id = _get_active_topic_run_id(db, user_id=str(uid) if uid else None)
-        finally:
-            db.close()
-        _set_run_id(request, run_id)
-
-    # Load topics for this run (if exists)
+    # Topics (HITL) is currently hidden on the document detail page.
+    # Keep the disabled code below so the feature can be restored later.
+    run_id = None
     topics: list[dict] = []
-    if run_id:
-        topics_res = await asgi_get(
-            request,
-            f"/documents/{document_id}/topics",
-            params={"run_id": run_id},
-        )
-        topics = topics_res.get("topics", []) or []
+
+    # # Resolve run_id per USER (NO global)
+    # uid = user.get("id") or user.get("user_id") or user.get("sub")
+    # run_id = _get_run_id(request)
+    #
+    # if not run_id:
+    #     db = SessionLocal()
+    #     try:
+    #         run_id = _get_active_topic_run_id(db, user_id=str(uid) if uid else None)
+    #     finally:
+    #         db.close()
+    #     _set_run_id(request, run_id)
+    #
+    # # Load topics for this run (if exists)
+    # if run_id:
+    #     topics_res = await asgi_get(
+    #         request,
+    #         f"/documents/{document_id}/topics",
+    #         params={"run_id": run_id},
+    #     )
+    #     topics = topics_res.get("topics", []) or []
 
     codes_view, code_stats = build_codes_view(doc)
     back_url_raw = request.query_params.get("back_url") or request.headers.get("referer")

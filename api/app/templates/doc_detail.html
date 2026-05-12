@@ -303,7 +303,11 @@
 </div>
 
 
-
+{#
+Topics (HITL) is temporarily hidden on the document detail page.
+The block is kept behind this disabled condition so it can be restored later.
+#}
+{% if false %}
 <div class="card">
   <h3>Topics (HITL)</h3>
     {% if not run_id %}
@@ -414,5 +418,6 @@
     </div>
   {% endif %}
 </div>
+{% endif %}
 
 {% endblock %}

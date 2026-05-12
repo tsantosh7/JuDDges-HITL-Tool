@@ -125,6 +125,11 @@
         </select>
       </div>
 
+      {#
+      Topic filter is temporarily hidden from the Search Documents page.
+      Keep this block available so the control can be restored later.
+      #}
+      {% if false %}
       <div class="grow">
         <label class="muted">Topic (your account)</label>
         <div class="muted" style="font-size:12px; margin:4px 0 6px 0;">Limits results to documents tagged with this topic in your own account. These topics are personal to your workspace and are not shared global filters.</div>
@@ -142,6 +147,7 @@
 
 
       </div>
+      {% endif %}
 
       <div style="min-width:220px;">
         <label class="muted">Coding source</label>
@@ -202,8 +208,8 @@
         </button>
       </form>
     {% else %}
-      <a class="btnlink" href="/ui/dashboard?msg=Please%20select%20a%20project%20first">
-        Select project before bulk add
+      <a class="btnlink" href="/ui/dashboard?msg=Please%20select%20a%20project%20first%20before%20bulk%20import">
+        Select project first for bulk import
       </a>
     {% endif %}
   {% endif %}
@@ -350,7 +356,7 @@
   const autoSubmitNames = new Set([
     "scope",
     "code",
-    "topic",
+    // "topic", // Topic filter is temporarily hidden.
     "has_human",
     "has_any_span",
     "include_codes_topics",

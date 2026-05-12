@@ -4813,11 +4813,12 @@ def add_documents_to_project(
             pg_insert(ProjectDocument)
             .values([{"project_id": project_id, "document_id": did} for did in doc_ids])
             .on_conflict_do_nothing(index_elements=["project_id", "document_id"])
+            .returning(ProjectDocument.document_id)
         )
-        res = db.execute(stmt)
+        inserted_doc_ids = db.execute(stmt).scalars().all()
         db.commit()
 
-        docs_added = int(res.rowcount or 0)
+        docs_added = len(inserted_doc_ids)
 
         # ✅ Run Solr update asynchronously so UI returns immediately
         background_tasks.add_task(solr_add_project_membership, core, str(project_id), doc_ids)
