@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import urllib.parse
 from collections import defaultdict
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID
 import os
@@ -1156,12 +1158,19 @@ async def ui_codes_page(
     user=Depends(require_paid_user),
 ):
     res = await asgi_get(request, "/codes", params={"include_inactive": bool(include_inactive)})
+    pending_res = await asgi_get(request, "/codes/pending_tags", params={"include_resolved": bool(include_inactive)})
+    codes = res.get("codes", []) or []
+    base_codes = [c for c in codes if c.get("version") == "v1"]
+    extension_codes = [c for c in codes if c.get("version") != "v1"]
     return request.app.state.templates.TemplateResponse(
         "codes.html",
         {
             "request": request,
             "user": user,
-            "codes": res.get("codes", []) or [],
+            "codes": codes,
+            "base_codes": base_codes,
+            "extension_codes": extension_codes,
+            "pending_tags": pending_res.get("pending_tags", []) or [],
             "include_inactive": include_inactive,
             "message": None,
         },
@@ -1206,6 +1215,30 @@ async def ui_codes_deactivate(
     user=Depends(require_role("admin")),
 ):
     await asgi_patch(request, f"/codes/{code}/deactivate")
+    return RedirectResponse("/ui/codes", status_code=303)
+
+
+@router.post("/codes/pending_tag_action")
+async def ui_codes_pending_tag_action(
+    request: Request,
+    tag: str = Form(...),
+    action: str = Form(...),
+    code: str = Form(""),
+    display_name: str = Form(""),
+    description: str = Form(""),
+    user=Depends(require_role("admin")),
+):
+    await asgi_post_json(
+        request,
+        "/codes/pending_tags/action",
+        {
+            "tag": tag,
+            "action": action,
+            "code": code or None,
+            "display_name": display_name or None,
+            "description": description or None,
+        },
+    )
     return RedirectResponse("/ui/codes", status_code=303)
 
 
@@ -1293,6 +1326,48 @@ def _kv_list_to_map(kv_list: Any) -> Dict[str, List[str]]:
     return out
 
 
+_VALUE_WS_RE = re.compile(r"\s+")
+_VALUE_PUNCT_RE = re.compile(r"[^a-z0-9]+")
+_ORDINAL_RE = re.compile(r"\b(\d+)(st|nd|rd|th)\b")
+
+
+def _agreement_norm(value: str) -> str:
+    s = str(value or "").strip().lower()
+    s = _ORDINAL_RE.sub(r"\1", s)
+    s = s.replace("&", " and ")
+    s = _VALUE_PUNCT_RE.sub(" ", s)
+    s = _VALUE_WS_RE.sub(" ", s).strip()
+    return s
+
+
+def _value_similarity(a: str, b: str) -> float:
+    left = _agreement_norm(a)
+    right = _agreement_norm(b)
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def _agreement_summary(human_values: List[str], model_values: List[str], threshold: float = 0.90) -> dict:
+    human_normed = {_agreement_norm(v) for v in human_values if _agreement_norm(v)}
+    model_normed = {_agreement_norm(v) for v in model_values if _agreement_norm(v)}
+    if not human_normed or not model_normed:
+        return {"disagree": False, "score": None, "status": "missing"}
+    if human_normed == model_normed:
+        return {"disagree": False, "score": 1.0, "status": "exact"}
+
+    best = 0.0
+    for h in human_values:
+        for m in model_values:
+            best = max(best, _value_similarity(h, m))
+
+    if best >= threshold:
+        return {"disagree": False, "score": best, "status": "close"}
+    return {"disagree": True, "score": best, "status": "disagree"}
+
+
 def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     def _first_present(*keys: str) -> Any:
         for k in keys:
@@ -1310,9 +1385,6 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
     rows: List[Dict[str, Any]] = []
     disagree_count = 0
 
-    def _norm_set(values: List[str]) -> Set[str]:
-        return {str(v).strip().lower() for v in (values or []) if str(v).strip()}
-
     for code in sorted(all_codes):
         hr = human_raw.get(code, [])
         hn = human_norm.get(code, [])
@@ -1322,9 +1394,10 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
         has_human = bool(hr or hn)
         has_model = bool(mr or mn)
 
-        a = _norm_set(hn) if hn else _norm_set(hr)
-        b = _norm_set(mn) if mn else _norm_set(mr)
-        disagree = bool(has_human and has_model and a and b and a != b)
+        human_compare_values = hr
+        model_compare_values = mr
+        agreement = _agreement_summary(human_compare_values, model_compare_values)
+        disagree = bool(hr and mr and agreement["disagree"])
         if disagree:
             disagree_count += 1
 
@@ -1358,6 +1431,8 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
                 "best": best,
                 "source": src,
                 "disagree": disagree,
+                "agreement_score": agreement["score"],
+                "agreement_status": agreement["status"],
             }
         )
 
@@ -1484,6 +1559,7 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
     # ✅ Fast membership check using Postgres (authoritative + instant)
     # ✅ Membership check via Postgres (authoritative + immediate)
     in_project = False
+    pending_tags: list[dict] = []
     if project_id:
         db = SessionLocal()
         try:
@@ -1491,6 +1567,16 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
             in_project = bool(row)
         finally:
             db.close()
+        pending_res = await asgi_get(
+            request,
+            "/codes/pending_tags",
+            params={
+                "document_id": document_id,
+                "group_id": WORK_GID,
+                "project_id": project_id,
+            },
+        )
+        pending_tags = pending_res.get("pending_tags", []) or []
 
     # Topics (HITL) is currently hidden on the document detail page.
     # Keep the disabled code below so the feature can be restored later.
@@ -1544,8 +1630,76 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
             "hyp_mine": hyp_mine,
             "workspace_group_id": WORK_GID,
             "workspace_group": workspace_group,
+            "pending_tags": pending_tags,
         },
     )
+
+# ============================================================
+# Document-level Hypothesis sync
+# ============================================================
+@router.post("/docs/{document_id}/sync_hypothesis")
+async def ui_doc_sync_hypothesis(
+    request: Request,
+    document_id: str,
+    user=Depends(require_paid_user),
+):
+    project_id = _get_project_id(request)
+    if not project_id:
+        msg = urllib.parse.quote("Select a project before syncing document annotations")
+        return RedirectResponse(f"/ui/docs/{document_id}?msg={msg}", status_code=303)
+
+    review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+    group_id = review_res.get("group_id")
+    if not group_id:
+        msg = urllib.parse.quote("Set the project review group first")
+        return RedirectResponse(f"/ui/docs/{document_id}?msg={msg}", status_code=303)
+
+    core = (request.session.get("core") or os.getenv("SOLR_GLOBAL_CORE") or "hitl_test").strip() or "hitl_test"
+    prepare_res = await asgi_post_json(
+        request,
+        "/hypothesis/prepare_workspace",
+        {
+            "core": core,
+            "group_id": group_id,
+            "project_id": project_id,
+            "document_id": document_id,
+            "include_model": True,
+            "include_gold": True,
+            "max_per_doc": 80,
+            "limit_per_request": 200,
+        },
+        timeout_s=300.0,
+    )
+    sync_res = await asgi_post_json(
+        request,
+        "/hypothesis/sync",
+        {
+            "core": core,
+            "group_id": group_id,
+            "project_id": project_id,
+            "document_id": document_id,
+            "all_groups": False,
+            "only_enabled_groups": False,
+            "write_snapshot": True,
+            "limit_per_request": 200,
+            "force_full": True,
+            "include_public": False,
+        },
+        timeout_s=300.0,
+    )
+    created = int(prepare_res.get("created_model_suggestions") or 0)
+    skipped = int(prepare_res.get("skipped_existing_model_suggestions") or 0)
+    failed = int(prepare_res.get("create_failed") or 0)
+    seen = int(sync_res.get("annotations_seen") or 0)
+    linked = int(sync_res.get("annotations_linked_to_docs") or 0)
+    unapproved = int(sync_res.get("annotations_skipped_unapproved_reviewers") or 0)
+    msg = urllib.parse.quote(
+        f"Document sync complete: {seen} annotations seen, {linked} linked, "
+        f"{created} suggestions copied, {skipped} existing skipped, {failed} copy failures, "
+        f"{unapproved} unapproved reviewer annotations skipped"
+    )
+    return RedirectResponse(f"/ui/docs/{document_id}?core={urllib.parse.quote(core)}&msg={msg}", status_code=303)
+
 
 # ============================================================
 # Topic actions
@@ -1932,6 +2086,7 @@ async def ui_hypothesis_sync_workspace_page(
         "include_model": True,
         "include_gold": True,
         "max_per_doc": 80,
+        "limit_per_request": 200,
     }
     return request.app.state.templates.TemplateResponse(
         "hypothesis_sync.html",

@@ -77,6 +77,29 @@ class ProjectHypothesisReviewGroup(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), primary_key=True)
     group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), nullable=False)
     created_by = Column(String, nullable=True)
+    last_synced_updated = Column(String, nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project")
+    group = relationship("HypothesisGroup")
+
+
+class ProjectReviewItem(Base):
+    __tablename__ = "project_review_items"
+
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), primary_key=True)
+    group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), primary_key=True)
+    item_id = Column(String, primary_key=True)
+
+    document_id = Column(String, ForeignKey("documents.document_id"), nullable=False)
+    item_type = Column(String, nullable=False)
+    code = Column(String, nullable=True)
+    value = Column(Text, nullable=True)
+    hypothesis_annotation_id = Column(String, nullable=True)
+    anchored = Column(Boolean, nullable=False, default=False)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -226,7 +249,50 @@ class CodeAlias(Base):
     )
 
 
+class PendingHypothesisTag(Base):
+    """
+    Reviewer-created Hypothesis tag that did not resolve to an active code/alias.
+    These are candidates for extension codes, aliases, or rejection.
+    """
+    __tablename__ = "pending_hypothesis_tags"
 
+    tag = Column(String, primary_key=True)
+    status = Column(String, nullable=False, default="pending")
+    mapped_code = Column(String, ForeignKey("codes.code"), nullable=True)
+
+    seen_count = Column(Integer, nullable=False, default=0)
+    first_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    last_group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), nullable=True)
+    last_project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=True)
+    last_document_id = Column(String, ForeignKey("documents.document_id"), nullable=True)
+    last_user = Column(String, nullable=True)
+    last_value = Column(Text, nullable=True)
+    last_annotation_id = Column(String, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PendingHypothesisTagOccurrence(Base):
+    """
+    Per-document occurrence of an unresolved reviewer tag.
+    """
+    __tablename__ = "pending_hypothesis_tag_occurrences"
+
+    tag = Column(String, ForeignKey("pending_hypothesis_tags.tag"), primary_key=True)
+    annotation_id = Column(String, primary_key=True)
+
+    group_id = Column(String, ForeignKey("hypothesis_groups.group_id"), nullable=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id"), nullable=True)
+    document_id = Column(String, ForeignKey("documents.document_id"), nullable=True)
+    user = Column(String, nullable=True)
+    value = Column(Text, nullable=True)
+    seen_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class ProjectDocumentReview(Base):

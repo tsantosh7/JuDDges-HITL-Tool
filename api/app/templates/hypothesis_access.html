@@ -22,24 +22,8 @@
   </ul>
 </div>
 
-
-<div class="card">
-  <h2>Step 1 — Log in to Hypothesis</h2>
-  <p class="muted">
-    Log in to Hypothesis using the account you will use for this project.
-  </p>
-
-  <a class="btnlink" href="https://hypothes.is/login" target="_blank" rel="noopener">
-    Log in to Hypothesis
-  </a>
-
-  <a class="btnlink" href="https://hypothes.is/signup" target="_blank" rel="noopener">
-    Create Hypothesis account
-  </a>
-</div>
-
 <div class="card" style="border-left:4px solid #7c3aed; background:#f5f3ff;">
-  <h2>Step 2 — Install Hypothesis in your browser</h2>
+  <h2>Step 1 — Install Hypothesis in your browser</h2>
 
   <p class="muted">
     Do not rely on old Via-style links. Use the official browser extension or bookmarklet instead.
@@ -61,16 +45,34 @@
   </p>
 </div>
 
+
+<div class="card">
+  <h2>Step 2 — Log in to Hypothesis</h2>
+  <p class="muted">
+    Log in to Hypothesis using the account you will use for this project.
+  </p>
+
+  <a class="btnlink" href="https://hypothes.is/login" target="_blank" rel="noopener">
+    Log in to Hypothesis
+  </a>
+
+  <a class="btnlink" href="https://hypothes.is/signup" target="_blank" rel="noopener">
+    Create Hypothesis account
+  </a>
+</div>
+
+
 <div class="card" style="border-left:4px solid #16a34a; background:#f0fdf4;">
-  <h2>Step 3 — Join the shared review group</h2>
+  <h2>Step 3 — Join the review group once</h2>
 
   <p class="muted">
-    Most projects use one reusable shared review group. Reviewers join it once, and the app separates project work
-    using project and document tags. Create a separate private group only for restricted projects or teams.
+    Most projects use one reusable shared review group. Reviewers join it once, then day-to-day review happens from
+    document pages. The app separates project work using project and document tags. Create a separate private group
+    only for restricted projects or teams.
   </p>
   {% if review_group_url %}
     <p class="muted">
-      Current project review group:
+      Current selected review group:
       <strong>{{ (review_group.name if review_group else review_group_id) or review_group_id }}</strong>
       <span class="mono">({{ review_group_id }})</span>
       {% if is_default_review_group %}
@@ -78,7 +80,7 @@
       {% endif %}
     </p>
     <a class="btnlink" href="{{ review_group_url }}" target="_blank" rel="noopener">
-      Join / Open Review Group
+      Join Review Group
     </a>
   {% else %}
     <div class="alert" style="margin-top:12px;">
@@ -86,7 +88,7 @@
     </div>
   {% endif %}
   <p class="muted">
-    After reviewers join, they should request review access with their Hypothesis username.
+    After reviewers join in Hypothesis, they should request app review access with their Hypothesis username.
     Admins approve requests in the review group settings before annotations are imported during sync.
   </p>
   <p class="muted">
@@ -101,7 +103,7 @@
     </a>
   {% endif %}
   <a class="btnlink" href="{{ workspace_settings_url }}">
-    Request / Manage Review Access
+    Request or Manage App Review Access
   </a>
 </div>
 
@@ -109,8 +111,8 @@
   <h2>Step 4 — Check the selected review group</h2>
 
   <p class="muted">
-    Confirm that the selected project has a review group and that the server account can access it.
-    For collaborative review, this is normally the shared review group.
+    Admins can confirm or change the selected project review group here. Reviewers usually do not need this page
+    after setup unless access needs to be requested again.
   </p>
 
   <a class="btnlink" href="{{ workspace_settings_url }}">

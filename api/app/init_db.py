@@ -48,13 +48,44 @@ def _apply_lightweight_migrations():
           project_id UUID PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
           group_id TEXT NOT NULL REFERENCES hypothesis_groups(group_id),
           created_by TEXT NULL,
+          last_synced_updated TEXT NULL,
+          last_synced_at TIMESTAMP NULL,
           created_at TIMESTAMP NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMP NOT NULL DEFAULT NOW()
         )
         """,
         """
+        ALTER TABLE project_hypothesis_review_groups
+          ADD COLUMN IF NOT EXISTS last_synced_updated TEXT NULL,
+          ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMP NULL
+        """,
+        """
         CREATE INDEX IF NOT EXISTS idx_project_hypothesis_review_groups_group
           ON project_hypothesis_review_groups(group_id)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS project_review_items (
+          project_id UUID NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+          group_id TEXT NOT NULL REFERENCES hypothesis_groups(group_id) ON DELETE CASCADE,
+          item_id TEXT NOT NULL,
+          document_id TEXT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+          item_type TEXT NOT NULL,
+          code TEXT NULL,
+          value TEXT NULL,
+          hypothesis_annotation_id TEXT NULL,
+          anchored BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (project_id, group_id, item_id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_project_review_items_project_doc
+          ON project_review_items(project_id, document_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_project_review_items_group_doc
+          ON project_review_items(group_id, document_id)
         """,
         """
         CREATE TABLE IF NOT EXISTS project_hypothesis_reviewers (
@@ -86,6 +117,55 @@ def _apply_lightweight_migrations():
         """
         CREATE INDEX IF NOT EXISTS idx_hypothesis_group_reviewers_status
           ON hypothesis_group_reviewers(group_id, status)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS pending_hypothesis_tags (
+          tag TEXT PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'pending',
+          mapped_code TEXT NULL REFERENCES codes(code),
+          seen_count INTEGER NOT NULL DEFAULT 0,
+          first_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          last_group_id TEXT NULL REFERENCES hypothesis_groups(group_id) ON DELETE SET NULL,
+          last_project_id UUID NULL REFERENCES projects(project_id) ON DELETE SET NULL,
+          last_document_id TEXT NULL REFERENCES documents(document_id) ON DELETE SET NULL,
+          last_user TEXT NULL,
+          last_value TEXT NULL,
+          last_annotation_id TEXT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        ALTER TABLE pending_hypothesis_tags
+          ADD COLUMN IF NOT EXISTS last_value TEXT NULL
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pending_hypothesis_tags_status_seen
+          ON pending_hypothesis_tags(status, last_seen_at DESC)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS pending_hypothesis_tag_occurrences (
+          tag TEXT NOT NULL REFERENCES pending_hypothesis_tags(tag) ON DELETE CASCADE,
+          annotation_id TEXT NOT NULL,
+          group_id TEXT NULL REFERENCES hypothesis_groups(group_id) ON DELETE SET NULL,
+          project_id UUID NULL REFERENCES projects(project_id) ON DELETE SET NULL,
+          document_id TEXT NULL REFERENCES documents(document_id) ON DELETE SET NULL,
+          "user" TEXT NULL,
+          value TEXT NULL,
+          seen_at TIMESTAMP NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (tag, annotation_id)
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pending_tag_occurrences_doc
+          ON pending_hypothesis_tag_occurrences(document_id, group_id, project_id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pending_tag_occurrences_tag_seen
+          ON pending_hypothesis_tag_occurrences(tag, seen_at DESC)
         """,
         """
         INSERT INTO hypothesis_group_reviewers (

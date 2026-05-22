@@ -38,7 +38,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from pydantic import BaseModel, Field, HttpUrl
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 
 import requests
@@ -58,8 +58,10 @@ from .init_db import init
 from .models import (
     Team, Project, Document, ProjectDocument,
     HypothesisGroup, HypothesisAnnotation, UserHypothesisWorkspace, ProjectHypothesisReviewGroup,
+    ProjectReviewItem,
     ProjectHypothesisReviewer, HypothesisGroupReviewer,
-    Code, CodeAlias, ProjectDocumentReview, TopicRun, DocumentTopic, DocEmbedding,
+    Code, CodeAlias, PendingHypothesisTag, PendingHypothesisTagOccurrence,
+    ProjectDocumentReview, TopicRun, DocumentTopic, DocEmbedding,
 )
 
 from app.topics.service import get_or_create_active_global_run
@@ -633,6 +635,10 @@ def resolve_tag_to_canonical(
     raw = normalize_tag(tag)
     if not raw:
         return None
+    if raw.lower().startswith("field:"):
+        raw = normalize_tag(raw.split(":", 1)[1])
+        if not raw:
+            return None
 
     # 1) Exact canonical match
     if raw in canon_version:
@@ -668,6 +674,56 @@ def resolve_tag_to_canonical(
     return None
 
 
+SYSTEM_TAG_PREFIXES = (
+    "source:",
+    "status:",
+    "project_id:",
+    "doc_id:",
+    "suggestion_id:",
+    "gold_ref_id:",
+    "field:",
+    "anchored:",
+)
+SYSTEM_TAGS = {
+    "bot:hitl",
+    "implicit_accept:true",
+}
+
+
+def is_candidate_code_tag(tag: str) -> bool:
+    raw = normalize_tag(tag)
+    if not raw:
+        return False
+    lc = raw.lower()
+    if lc in SYSTEM_TAGS or lc in REVIEW_REJECT_TAGS:
+        return False
+    return not any(lc.startswith(prefix) for prefix in SYSTEM_TAG_PREFIXES)
+
+
+def split_codes_and_unknown_tags(db, tags: list[str]) -> tuple[set[str], set[str], set[str], set[str]]:
+    canon_version, alias_to_canon, key_to_canon = load_code_maps(db)
+
+    v1: set[str] = set()
+    ext: set[str] = set()
+    allc: set[str] = set()
+    unknown: set[str] = set()
+
+    for t in (tags or []):
+        canonical = resolve_tag_to_canonical(
+            t, canon_version, alias_to_canon, key_to_canon
+        )
+        if canonical:
+            allc.add(canonical)
+            if canon_version.get(canonical) == "v1":
+                v1.add(canonical)
+            else:
+                ext.add(canonical)
+        elif is_candidate_code_tag(t):
+            unknown.add(normalize_tag(t))
+
+    return v1, ext, allc, unknown
+
+
 def split_codes(db, tags: list[str]) -> tuple[set[str], set[str], set[str]]:
     """
     Registry-backed split:
@@ -676,25 +732,7 @@ def split_codes(db, tags: list[str]) -> tuple[set[str], set[str], set[str]]:
       - allc: union
     Unregistered/unresolvable tags are ignored (governance-first).
     """
-    canon_version, alias_to_canon, key_to_canon = load_code_maps(db)
-
-    v1: set[str] = set()
-    ext: set[str] = set()
-    allc: set[str] = set()
-
-    for t in (tags or []):
-        canonical = resolve_tag_to_canonical(
-            t, canon_version, alias_to_canon, key_to_canon
-        )
-        if not canonical:
-            continue
-
-        allc.add(canonical)
-        if canon_version.get(canonical) == "v1":
-            v1.add(canonical)
-        else:
-            ext.add(canonical)
-
+    v1, ext, allc, _unknown = split_codes_and_unknown_tags(db, tags)
     return v1, ext, allc
 
 
@@ -1166,6 +1204,7 @@ def solr_select(core: str, params: dict) -> dict:
         return out
 
     flat_params = _flatten_params(params)
+    encoded_params = urllib.parse.urlencode(flat_params)
 
     # (connect, read)
     timeout = (3.0, 20.0)
@@ -1189,8 +1228,12 @@ def solr_select(core: str, params: dict) -> dict:
         ) from err
 
     try:
-        # First try GET (fast path)
-        r = sess.get(url, params=flat_params, timeout=timeout)
+        # Use POST first for large Solr queries so long fq lists do not hit
+        # Jetty/proxy URI limits.
+        if len(encoded_params) > 6000:
+            r = sess.post(url, data=flat_params, timeout=timeout)
+        else:
+            r = sess.get(url, params=flat_params, timeout=timeout)
         if r.status_code == 414:
             # Retry as POST to avoid "URI Too Long"
             r = sess.post(url, data=flat_params, timeout=timeout)
@@ -1597,6 +1640,7 @@ class HypothesisSyncRequest(BaseModel):
     core: str = SOLR_GLOBAL_CORE
     group_id: Optional[str] = None
     project_id: Optional[UUID] = None
+    document_id: Optional[str] = None
     all_groups: bool = True
     only_enabled_groups: bool = True
     write_snapshot: bool = True
@@ -1611,9 +1655,11 @@ class WorkspacePrepareRequest(BaseModel):
     core: str = SOLR_GLOBAL_CORE
     project_id: UUID
     group_id: str
+    document_id: Optional[str] = None
     include_model: bool = True
     include_gold: bool = True
     max_per_doc: int = 80
+    limit_per_request: int = 200
 
 
 # Optional: if your frontend expects these (Fix 2)
@@ -2292,11 +2338,90 @@ def bulk_resolve_document_ids(db, urls: List[str]) -> Dict[str, str]:
     return url_to_doc
 
 
+def record_pending_hypothesis_tag(
+    db,
+    *,
+    tag: str,
+    group_id: Optional[str],
+    project_id: Optional[UUID],
+    document_id: Optional[str],
+    user: Optional[str],
+    value: Optional[str],
+    annotation_id: Optional[str],
+    seen_at: Optional[datetime],
+) -> None:
+    tag = normalize_tag(tag)
+    if not tag:
+        return
+    row = db.get(PendingHypothesisTag, tag)
+    now = parse_dt_utc(seen_at) or datetime.utcnow()
+    if not row:
+        row = PendingHypothesisTag(
+            tag=tag,
+            status="pending",
+            seen_count=1,
+            first_seen_at=now,
+            last_seen_at=now,
+            last_group_id=group_id,
+            last_project_id=project_id,
+            last_document_id=document_id,
+            last_user=user,
+            last_value=value,
+            last_annotation_id=annotation_id,
+        )
+        db.add(row)
+        if annotation_id:
+            db.add(PendingHypothesisTagOccurrence(
+                tag=tag,
+                annotation_id=annotation_id,
+                group_id=group_id,
+                project_id=project_id,
+                document_id=document_id,
+                user=user,
+                value=value,
+                seen_at=now,
+            ))
+        return
+
+    occ = db.get(PendingHypothesisTagOccurrence, {"tag": tag, "annotation_id": annotation_id}) if annotation_id else None
+    if not occ:
+        row.seen_count = int(row.seen_count or 0) + 1
+    row.last_seen_at = now
+    row.last_group_id = group_id or row.last_group_id
+    row.last_project_id = project_id or row.last_project_id
+    row.last_document_id = document_id or row.last_document_id
+    row.last_user = user or row.last_user
+    row.last_value = value if value is not None else row.last_value
+    row.last_annotation_id = annotation_id or row.last_annotation_id
+
+    if annotation_id:
+        if not occ:
+            occ = PendingHypothesisTagOccurrence(
+                tag=tag,
+                annotation_id=annotation_id,
+                group_id=group_id,
+                project_id=project_id,
+                document_id=document_id,
+                user=user,
+                value=value,
+                seen_at=now,
+            )
+            db.add(occ)
+        else:
+            occ.group_id = group_id or occ.group_id
+            occ.project_id = project_id or occ.project_id
+            occ.document_id = document_id or occ.document_id
+            occ.user = user or occ.user
+            occ.value = value if value is not None else occ.value
+            occ.seen_at = now
+
+
 def upsert_annotations_bulk(
     db,
     fields_list: List[dict],
     url_to_doc: Dict[str, str],
     *,
+    project_id: Optional[UUID] = None,
     source_type: str = "human",
     workspace_user_id: Optional[str] = None,
     annotation_status: str = "synced",
@@ -2380,6 +2505,31 @@ def upsert_annotations_bulk(
         if doc_id:
             linked += 1
 
+            if effective_source_type in {"model_suggestion", "gold_reference"}:
+                tag_list = [str(t).strip() for t in (fields.get("tags") or []) if str(t).strip()]
+                refs = extract_project_review_item_refs(tag_list)
+                project_ref = refs.get("project_id")
+                item_id = refs.get("suggestion_id") or refs.get("gold_ref_id")
+                if project_ref and item_id:
+                    try:
+                        item_project_id = UUID(str(project_ref))
+                    except Exception:
+                        item_project_id = None
+                    if item_project_id:
+                        record_project_review_item(
+                            db,
+                            project_id=item_project_id,
+                            group_id=fields["group_id"],
+                            document_id=doc_id,
+                            item_id=item_id,
+                            item_type=(
+                                "gold_reference" if refs.get("gold_ref_id") else "model_suggestion"
+                            ),
+                            code=refs.get("field"),
+                            hypothesis_annotation_id=ann_id,
+                            anchored=bool(fields.get("exact")),
+                        )
+
             if not is_human_export_source(effective_source_type):
                 continue
             if has_reject_review_marker(fields.get("tags") or []):
@@ -2393,14 +2543,26 @@ def upsert_annotations_bulk(
 
             # Codes (registry-backed)
             tags = fields.get("tags") or []
-            v1, ext, allc = split_codes(db, tags)
+            v1, ext, allc, unknown_tags = split_codes_and_unknown_tags(db, tags)
+            value = review_value_from_annotation(fields.get("text"), fields.get("exact"))
+            for unknown_tag in unknown_tags:
+                record_pending_hypothesis_tag(
+                    db,
+                    tag=unknown_tag,
+                    group_id=fields.get("group_id"),
+                    project_id=project_id,
+                    document_id=doc_id,
+                    user=fields.get("user"),
+                    value=value,
+                    annotation_id=ann_id,
+                    seen_at=new_updated or new_created,
+                )
 
             bucket = doc_codes.setdefault(doc_id, {"v1": set(), "ext": set(), "all": set()})
             bucket["v1"].update(v1)
             bucket["ext"].update(ext)
             bucket["all"].update(allc)
 
-            value = review_value_from_annotation(fields.get("text"), fields.get("exact"))
             if value:
                 value_bucket = doc_code_values.setdefault(doc_id, {})
                 for code in allc:
@@ -2554,6 +2716,67 @@ def stable_workspace_suggestion_id(kind: str, project_id: UUID, doc_id: str, cod
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
+_QUOTE_WS = re.compile(r"\s+")
+
+
+def _quote_norm(value: str) -> str:
+    return _QUOTE_WS.sub(" ", (value or "").strip()).lower()
+
+
+def find_unique_text_quote_selector(
+    content_text: str,
+    value: str,
+    *,
+    window: int = 50,
+    min_len: int = 5,
+) -> dict | None:
+    """
+    Return a Hypothesis TextQuoteSelector only when the predicted value can be
+    anchored unambiguously in the document text.
+    """
+    if not content_text or not value:
+        return None
+
+    raw_value = str(value).strip()
+    if _quote_norm(raw_value) in {"", "data not available"}:
+        return None
+    if len(_quote_norm(raw_value)) < min_len:
+        return None
+
+    content_norm = _quote_norm(content_text)
+    value_norm = _quote_norm(raw_value)
+
+    start = 0
+    hits = 0
+    while True:
+        idx = content_norm.find(value_norm, start)
+        if idx == -1:
+            break
+        hits += 1
+        if hits > 1:
+            return None
+        start = idx + 1
+    if hits != 1:
+        return None
+
+    parts = [p for p in re.split(r"\s+", raw_value) if p]
+    if not parts:
+        return None
+    pattern = r"\s+".join(re.escape(p) for p in parts)
+    matches = list(re.finditer(pattern, content_text, flags=re.IGNORECASE))
+    if len(matches) != 1:
+        return None
+
+    match = matches[0]
+    exact = content_text[match.start():match.end()]
+    return {
+        "type": "TextQuoteSelector",
+        "exact": exact,
+        "prefix": content_text[max(0, match.start() - window):match.start()],
+        "suffix": content_text[match.end():min(len(content_text), match.end() + window)],
+    }
+
+
 def hypothesis_search_rows(group_id: str, tags: list[str], limit: int = 200) -> list[dict]:
     params: dict[str, Any] = {
         "group": group_id,
@@ -2601,6 +2824,8 @@ def prepare_model_suggestion_payload(
     uri: str,
     code: str,
     value: str,
+    anchor_value: str | None = None,
+    selector: dict | None = None,
 ) -> tuple[str, dict]:
     sid = stable_workspace_suggestion_id("model", project_id, doc_id, code, value)
     tags = [
@@ -2608,25 +2833,43 @@ def prepare_model_suggestion_payload(
         "bot:hitl",
         "status:suggested",
         "implicit_accept:true",
+        "anchored:quote" if selector else "anchored:none",
         f"project_id:{project_id}",
         f"doc_id:{doc_id}",
         f"field:{code}",
         f"suggestion_id:{sid}",
     ]
-    text = (
-        "[MODEL SUGGESTION]\n"
-        f"Code: {code}\n"
-        f"Suggested value: {value}\n\n"
+    raw_anchor = (anchor_value or "").strip()
+    text_lines = [
+        "[MODEL SUGGESTION]",
+        f"Code: {code}",
+        f"Suggested value: {value}",
+    ]
+    if raw_anchor and raw_anchor != str(value).strip():
+        text_lines.append(f"Source text: {raw_anchor}")
+    if not selector:
+        text_lines.append("Anchor: page note; exact source text was not found uniquely in this document.")
+    text_lines.extend([
+        "",
         "If this is correct, leave it unchanged. To reject or correct it, add your own review annotation "
-        "or reply with review:reject / review:corrected in the project review group."
-    )
-    return sid, {
+        "or reply with review:reject / review:corrected in the project review group.",
+    ])
+    text = "\n".join(text_lines)
+    payload = {
         "group": group_id,
         "uri": uri,
         "text": text,
         "tags": tags,
         "permissions": {"read": [f"group:{group_id}"]},
     }
+    if selector:
+        payload["target"] = [
+            {
+                "source": uri,
+                "selector": [selector],
+            }
+        ]
+    return sid, payload
 
 
 def prepare_model_annotation_payload(
@@ -2745,6 +2988,139 @@ def prepare_gold_reference_payload(
     return rid, payload
 
 
+def extract_project_review_item_refs(tags: list[str]) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    for tag in tags or []:
+        s = str(tag).strip()
+        if not s or ":" not in s:
+            continue
+        key, value = s.split(":", 1)
+        if key in {"project_id", "doc_id", "suggestion_id", "gold_ref_id", "field"} and value:
+            refs[key] = value
+    return refs
+
+
+def record_project_review_item(
+    db,
+    *,
+    project_id: UUID,
+    group_id: str,
+    document_id: str,
+    item_id: str,
+    item_type: str,
+    code: str | None = None,
+    value: str | None = None,
+    hypothesis_annotation_id: str | None = None,
+    anchored: bool = False,
+) -> None:
+    row = db.get(
+        ProjectReviewItem,
+        {"project_id": project_id, "group_id": group_id, "item_id": item_id},
+    )
+    if not row:
+        row = ProjectReviewItem(
+            project_id=project_id,
+            group_id=group_id,
+            item_id=item_id,
+            document_id=document_id,
+            item_type=item_type,
+            code=code,
+            value=value,
+            hypothesis_annotation_id=hypothesis_annotation_id,
+            anchored=anchored,
+        )
+        db.add(row)
+        return
+
+    row.document_id = document_id
+    row.item_type = item_type
+    row.code = code or row.code
+    row.value = value if value is not None else row.value
+    row.hypothesis_annotation_id = hypothesis_annotation_id or row.hypothesis_annotation_id
+    row.anchored = bool(anchored or row.anchored)
+
+
+def load_cached_project_review_refs(
+    db,
+    *,
+    project_id: UUID,
+    group_id: str,
+    doc_ids: list[str],
+) -> dict[str, dict[str, set[str]]]:
+    refs_by_doc: dict[str, dict[str, set[str]]] = {}
+    if not doc_ids:
+        return refs_by_doc
+
+    rows = (
+        db.execute(
+            select(ProjectReviewItem)
+            .where(ProjectReviewItem.project_id == project_id)
+            .where(ProjectReviewItem.group_id == group_id)
+            .where(ProjectReviewItem.document_id.in_(doc_ids))
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        bucket = refs_by_doc.setdefault(row.document_id, {"suggestion_id": set(), "gold_ref_id": set()})
+        if row.item_type in {"model_suggestion", "model_annotation"}:
+            bucket["suggestion_id"].add(row.item_id)
+        elif row.item_type == "gold_reference":
+            bucket["gold_ref_id"].add(row.item_id)
+
+    annotation_rows = (
+        db.execute(
+            select(HypothesisAnnotation)
+            .where(HypothesisAnnotation.group_id == group_id)
+            .where(HypothesisAnnotation.document_id.in_(doc_ids))
+            .where(HypothesisAnnotation.source_type.in_(["model_suggestion", "gold_reference"]))
+        )
+        .scalars()
+        .all()
+    )
+    project_tag = f"project_id:{project_id}"
+    for ann in annotation_rows:
+        tags = _normalize_tags(ann.tags)
+        if project_tag not in set(tags):
+            continue
+        refs = extract_project_review_item_refs(tags)
+        doc_id = refs.get("doc_id") or ann.document_id
+        if not doc_id:
+            continue
+        bucket = refs_by_doc.setdefault(doc_id, {"suggestion_id": set(), "gold_ref_id": set()})
+        if refs.get("suggestion_id"):
+            sid = refs["suggestion_id"]
+            bucket["suggestion_id"].add(sid)
+            record_project_review_item(
+                db,
+                project_id=project_id,
+                group_id=group_id,
+                document_id=doc_id,
+                item_id=sid,
+                item_type="model_suggestion",
+                code=refs.get("field"),
+                hypothesis_annotation_id=ann.annotation_id,
+                anchored=bool(ann.exact),
+            )
+        if refs.get("gold_ref_id"):
+            rid = refs["gold_ref_id"]
+            bucket["gold_ref_id"].add(rid)
+            record_project_review_item(
+                db,
+                project_id=project_id,
+                group_id=group_id,
+                document_id=doc_id,
+                item_id=rid,
+                item_type="gold_reference",
+                code=refs.get("field"),
+                hypothesis_annotation_id=ann.annotation_id,
+                anchored=bool(ann.exact),
+            )
+
+    db.flush()
+    return refs_by_doc
+
+
 
 # ------------------------------------------------------------------------------
 # Progress streaming (SSE)
@@ -2838,12 +3214,28 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
         groups_total = len(group_ids)
         scoped_urls: list[str] = []
+        scoped_url_set: set[str] = set()
         if payload.project_id:
             scoped_urls = project_sync_urls(db, payload.project_id)
+            if payload.document_id:
+                wanted_url = (
+                    db.execute(
+                        select(Document.canonical_url)
+                        .join(ProjectDocument, ProjectDocument.document_id == Document.document_id)
+                        .where(ProjectDocument.project_id == payload.project_id)
+                        .where(ProjectDocument.document_id == payload.document_id)
+                    )
+                    .scalars()
+                    .first()
+                )
+                wanted_url = normalize_url(wanted_url) if wanted_url else None
+                scoped_urls = [wanted_url] if wanted_url else []
+            scoped_url_set = {u for u in scoped_urls if u}
             _emit("scope", {
                 "project_id": str(payload.project_id),
+                "document_id": payload.document_id,
                 "documents_total": len(scoped_urls),
-                "mode": "project",
+                "mode": "document" if payload.document_id else "project",
             })
 
         totals = {
@@ -2894,7 +3286,17 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                         .first()
                     )
                 cursor = None
-                if g_row and not payload.force_full and not scoped_urls:
+                project_sync_row = None
+                if payload.project_id:
+                    project_sync_row = db.get(ProjectHypothesisReviewGroup, payload.project_id)
+                    if (
+                        project_sync_row
+                        and project_sync_row.group_id == gid
+                        and not payload.force_full
+                        and not payload.document_id
+                    ):
+                        cursor = project_sync_row.last_synced_updated
+                elif g_row and not payload.force_full:
                     cursor = g_row.last_synced_updated
 
                 _emit("group_start", {
@@ -2925,15 +3327,38 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
                 # Fetch annotations (paginated)
                 if scoped_urls:
-                    for doc_i, uri in enumerate(scoped_urls, start=1):
+                    if payload.document_id:
+                        for doc_i, uri in enumerate(scoped_urls, start=1):
+                            _emit("progress", {
+                                "phase": "fetching_project_document",
+                                "group_id": gid,
+                                "group_i": gi,
+                                "groups_total": groups_total,
+                                "groups_done": totals["groups_synced"],
+                                "document_i": doc_i,
+                                "documents_total": len(scoped_urls),
+                                "annotations_seen": totals["annotations_seen"],
+                                "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                                "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+                            })
+                            for raw in hypothesis_iter_group_annotations(
+                                gid,
+                                limit=payload.limit_per_request,
+                                uri=uri,
+                            ):
+                                ann_id = raw.get("id")
+                                if ann_id:
+                                    ann_by_id[ann_id] = raw
+                                last_updated_seen = raw.get("updated") or last_updated_seen
+                    else:
                         _emit("progress", {
-                            "phase": "fetching_project_document",
+                            "phase": "fetching_project_group_changes",
                             "group_id": gid,
                             "group_i": gi,
                             "groups_total": groups_total,
                             "groups_done": totals["groups_synced"],
-                            "document_i": doc_i,
                             "documents_total": len(scoped_urls),
+                            "cursor": cursor,
                             "annotations_seen": totals["annotations_seen"],
                             "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
                             "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
@@ -2941,12 +3366,26 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                         for raw in hypothesis_iter_group_annotations(
                             gid,
                             limit=payload.limit_per_request,
-                            uri=uri,
+                            search_after=cursor,
                         ):
                             ann_id = raw.get("id")
                             if ann_id:
                                 ann_by_id[ann_id] = raw
                             last_updated_seen = raw.get("updated") or last_updated_seen
+
+                            if len(ann_by_id) % 500 == 0:
+                                _emit("progress", {
+                                    "phase": "fetching_project_group_changes",
+                                    "group_id": gid,
+                                    "group_i": gi,
+                                    "groups_total": groups_total,
+                                    "groups_done": totals["groups_synced"],
+                                    "documents_total": len(scoped_urls),
+                                    "group_annotations_fetched": len(ann_by_id),
+                                    "annotations_seen": totals["annotations_seen"],
+                                    "annotations_linked_to_docs": totals["annotations_linked_to_docs"],
+                                    "docs_flagged_in_solr": totals["docs_flagged_in_solr"],
+                                })
                 else:
                     for raw in hypothesis_iter_group_annotations(
                         gid,
@@ -2988,6 +3427,30 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
                 _emit("group_fetched", {"group_id": gid, "annotations_fetched": len(ann_list)})
 
+                refs_needed: set[str] = set()
+                for raw in ann_list:
+                    for ref in raw.get("references") or []:
+                        if ref and str(ref) not in ann_by_id:
+                            refs_needed.add(str(ref))
+                if refs_needed:
+                    parent_rows = (
+                        db.execute(
+                            select(HypothesisAnnotation)
+                            .where(HypothesisAnnotation.annotation_id.in_(list(refs_needed)))
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    for parent in parent_rows:
+                        if parent.raw:
+                            ann_by_id[parent.annotation_id] = parent.raw
+                        else:
+                            ann_by_id[parent.annotation_id] = {
+                                "id": parent.annotation_id,
+                                "tags": parent.tags or [],
+                                "target": [{"source": parent.canonical_url}] if parent.canonical_url else [],
+                            }
+
                 if payload.write_snapshot:
                     path = snapshot_path_for_group(gid)
                     write_snapshot_jsonl(path, ann_list)
@@ -2995,10 +3458,18 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
 
                 extracted: List[dict] = []
                 urls: List[str] = []
-                max_updated_str: Optional[str] = None if scoped_urls else cursor
+                max_updated_str: Optional[str] = last_updated_seen if scoped_urls else cursor
+                selected_project_tag = f"project_id:{payload.project_id}" if payload.project_id else None
 
                 for raw in ann_list:
                     fields, _has_span, updated_str = hypothesis_extract(raw)
+                    if scoped_urls:
+                        field_url = normalize_url(fields.get("canonical_url")) if fields.get("canonical_url") else None
+                        tag_set = {str(t).strip() for t in (fields.get("tags") or []) if str(t).strip()}
+                        if field_url not in scoped_url_set and (
+                            not selected_project_tag or selected_project_tag not in tag_set
+                        ):
+                            continue
                     fields["source_type"] = source_type_for_annotation(fields, group_role)
                     if group_role == "project_review" and fields["source_type"] == "human":
                         fields = enrich_project_review_fields(fields, ann_by_id)
@@ -3012,7 +3483,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                     extracted.append(fields)
                     if fields.get("canonical_url"):
                         urls.append(fields["canonical_url"])
-                    if updated_str:
+                    if updated_str and not scoped_urls:
                         max_updated_str = updated_str  # sorted asc, so last wins
 
                 urls_unique = list({normalize_url(u) for u in urls if u})
@@ -3026,6 +3497,7 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                     db,
                     extracted,
                     url_to_doc,
+                    project_id=payload.project_id,
                     source_type=source_type_for_group_role(group_role),
                     workspace_user_id=workspace_user_id,
                 )
@@ -3045,8 +3517,16 @@ def run_hypothesis_sync(payload: HypothesisSyncRequest, emit=None) -> dict:
                     "sample_codes_all_count": (len(next(iter(doc_codes.values()))["all"]) if doc_codes else 0),
                 })
 
-                if g_row:
-                    if max_updated_str and not scoped_urls:
+                if payload.project_id and project_sync_row and project_sync_row.group_id == gid:
+                    if max_updated_str:
+                        if not payload.document_id:
+                            project_sync_row.last_synced_updated = max_updated_str
+                    project_sync_row.last_synced_at = datetime.utcnow()
+                    if g_row:
+                        g_row.last_synced_at = datetime.utcnow()
+                    db.commit()
+                elif g_row:
+                    if max_updated_str:
                         g_row.last_synced_updated = max_updated_str
                     g_row.last_synced_at = datetime.utcnow()
                     db.commit()
@@ -3097,13 +3577,22 @@ def hypothesis_sync(payload: HypothesisSyncRequest):
     return run_hypothesis_sync(payload)
 
 
-@app.post("/hypothesis/prepare_workspace")
-def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Request):
-    uid = current_user_id(request)
+def run_hypothesis_prepare_workspace(
+    payload: WorkspacePrepareRequest,
+    *,
+    user_id: str,
+    is_admin: bool,
+    emit=None,
+) -> dict:
+    def _emit(ev: str, d: dict):
+        if emit:
+            emit(ev, d)
 
     db = SessionLocal()
     try:
-        assert_project_member_or_admin(db, payload.project_id, uid, request)
+        _emit("stage", {"msg": "checking_project_access"})
+        if not is_admin:
+            assert_project_member(db, payload.project_id, user_id)
 
         configured_group_id, is_default_group = project_review_group_id(db, payload.project_id)
         if not configured_group_id or configured_group_id != payload.group_id:
@@ -3116,6 +3605,7 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
         if not group:
             raise HTTPException(404, "Project review group not found")
 
+        _emit("stage", {"msg": "checking_hypothesis_group_access", "group_id": payload.group_id})
         profile = hypothesis_get_profile()
         server_userid = hypothesis_profile_userid(profile)
         if not hypothesis_profile_has_group(profile, payload.group_id):
@@ -3131,20 +3621,43 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
 
         doc_rows = (
             db.execute(
-                select(Document.document_id, Document.canonical_url)
+                select(Document.document_id, Document.canonical_url, Document.content_text)
                 .join(ProjectDocument, ProjectDocument.document_id == Document.document_id)
                 .where(ProjectDocument.project_id == payload.project_id)
             )
             .all()
         )
-        doc_ids = [str(did) for did, _ in doc_rows if did]
-        doc_url = {str(did): normalize_url(url) for did, url in doc_rows if did and url}
+        if payload.document_id:
+            doc_rows = [r for r in doc_rows if str(r[0]) == str(payload.document_id)]
+        doc_ids = [str(did) for did, _, _ in doc_rows if did]
+        doc_url = {str(did): normalize_url(url) for did, url, _ in doc_rows if did and url}
+        doc_text = {str(did): (content_text or "") for did, _, content_text in doc_rows if did}
 
         created_model = 0
         skipped_model = 0
         created_gold = 0
         skipped_gold = 0
+        anchored_model = 0
+        unanchored_model = 0
+        create_failed = 0
         model_docs_with_annotations: set[str] = set()
+
+        _emit("progress", {
+            "phase": "documents_loaded",
+            "documents_total": len(doc_ids),
+            "prepare_done": 0,
+            "prepare_total": None,
+            "created_model_suggestions": 0,
+            "skipped_existing_model_suggestions": 0,
+            "created_gold_references": 0,
+            "skipped_existing_gold_references": 0,
+            "anchored_model_suggestions": 0,
+            "unanchored_model_suggestions": 0,
+        })
+
+        model_rows: list[HypothesisAnnotation] = []
+        solr_suggestion_docs: list[tuple[str, list[tuple[str, str, str]]]] = []
+        gold_rows: list[HypothesisAnnotation] = []
 
         if payload.include_model and doc_ids:
             model_rows = (
@@ -3158,55 +3671,37 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
                 .scalars()
                 .all()
             )
-            for ann in model_rows:
-                if not ann.document_id:
-                    continue
-                uri = doc_url.get(ann.document_id) or ann.canonical_url
-                if not uri:
-                    continue
-                model_docs_with_annotations.add(ann.document_id)
-                sid, ann_payload = prepare_model_annotation_payload(
-                    group_id=payload.group_id,
-                    project_id=payload.project_id,
-                    doc_id=ann.document_id,
-                    uri=uri,
-                    annotation=ann,
-                )
-                existing = hypothesis_search_rows(payload.group_id, [f"suggestion_id:{sid}"], limit=1)
-                if existing:
-                    skipped_model += 1
-                    continue
-                hypothesis_create_annotation(ann_payload)
-                created_model += 1
+
+            _emit("progress", {
+                "phase": "loading_solr_model_suggestions",
+                "documents_total": len(doc_ids),
+                "model_annotations_total": len(model_rows),
+            })
 
             solr_docs = fetch_model_export_docs(payload.core, doc_ids)
             for d in solr_docs:
                 doc_id = d.get("document_id_s")
-                uri = doc_url.get(doc_id)
-                if not doc_id or not uri:
+                if not doc_id or doc_id not in doc_url:
                     continue
-                if doc_id in model_docs_with_annotations:
+                norm_pairs = parse_solr_kv(d.get("code_value_model_norm_kv_ss") or [])
+                raw_pairs = parse_solr_kv(d.get("code_value_model_kv_ss") or [])
+
+                review_pairs: list[tuple[str, str, str]] = []
+                source_pairs = norm_pairs or raw_pairs
+                for idx, (code, value) in enumerate(source_pairs):
+                    anchor_value = value
+                    if idx < len(raw_pairs) and raw_pairs[idx][0] == code:
+                        anchor_value = raw_pairs[idx][1]
+                    elif raw_pairs:
+                        raw_match = next((raw_value for raw_code, raw_value in raw_pairs if raw_code == code), "")
+                        if raw_match:
+                            anchor_value = raw_match
+                    review_pairs.append((code, value, anchor_value))
+
+                if not review_pairs:
                     continue
-                kv_items = d.get("code_value_model_norm_kv_ss") or d.get("code_value_model_kv_ss") or []
-                per_doc = 0
-                for code, value in parse_solr_kv(kv_items):
-                    if per_doc >= max(1, min(int(payload.max_per_doc), 500)):
-                        break
-                    sid, ann_payload = prepare_model_suggestion_payload(
-                        group_id=payload.group_id,
-                        project_id=payload.project_id,
-                        doc_id=doc_id,
-                        uri=uri,
-                        code=code,
-                        value=value,
-                    )
-                    existing = hypothesis_search_rows(payload.group_id, [f"suggestion_id:{sid}"], limit=1)
-                    if existing:
-                        skipped_model += 1
-                        continue
-                    hypothesis_create_annotation(ann_payload)
-                    created_model += 1
-                    per_doc += 1
+                max_doc_items = max(1, min(int(payload.max_per_doc), 500))
+                solr_suggestion_docs.append((doc_id, review_pairs[:max_doc_items]))
 
         if payload.include_gold and doc_ids:
             gold_rows = (
@@ -3220,11 +3715,267 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
                 .scalars()
                 .all()
             )
-            for ann in gold_rows:
+
+        prepare_total = len(model_rows) + sum(len(pairs) for _, pairs in solr_suggestion_docs) + len(gold_rows)
+        prepare_done = 0
+
+        _emit("progress", {
+            "phase": "prepare_start",
+            "documents_total": len(doc_ids),
+            "prepare_done": prepare_done,
+            "prepare_total": prepare_total,
+            "model_annotations_total": len(model_rows),
+            "solr_model_suggestions_total": sum(len(pairs) for _, pairs in solr_suggestion_docs),
+            "gold_references_total": len(gold_rows),
+        })
+
+        def emit_prepare_progress(phase: str, **extra):
+            _emit("progress", {
+                "phase": phase,
+                "documents_total": len(doc_ids),
+                "prepare_done": prepare_done,
+                "prepare_total": prepare_total,
+                "created_model_suggestions": created_model,
+                "skipped_existing_model_suggestions": skipped_model,
+                "created_gold_references": created_gold,
+                "skipped_existing_gold_references": skipped_gold,
+                "anchored_model_suggestions": anchored_model,
+                "unanchored_model_suggestions": unanchored_model,
+                "create_failed": create_failed,
+                **extra,
+            })
+
+        def emit_prepare_warning(message: str, **extra):
+            _emit("warning", {"message": message, **extra})
+
+        existing_refs_by_doc = load_cached_project_review_refs(
+            db,
+            project_id=payload.project_id,
+            group_id=payload.group_id,
+            doc_ids=doc_ids,
+        )
+        existing_lookup_failed_docs: set[str] = set()
+
+        def existing_workspace_refs_for_doc(doc_id: str, uri: str) -> dict[str, set[str]]:
+            cached = existing_refs_by_doc.get(doc_id)
+            if cached is not None:
+                return cached
+
+            refs = {"suggestion_id": set(), "gold_ref_id": set()}
+            project_tag = f"project_id:{payload.project_id}"
+            doc_tag = f"doc_id:{doc_id}"
+            try:
+                for raw in hypothesis_iter_group_annotations(
+                    payload.group_id,
+                    limit=payload.limit_per_request,
+                    uri=uri,
+                ):
+                    ann_id = raw.get("id")
+                    tags = [str(t).strip() for t in (raw.get("tags") or []) if str(t).strip()]
+                    tag_set = set(tags)
+                    if project_tag not in tag_set or doc_tag not in tag_set:
+                        continue
+                    item_refs = extract_project_review_item_refs(tags)
+                    for tag in tags:
+                        if tag.startswith("suggestion_id:"):
+                            item_id = tag.split(":", 1)[1]
+                            refs["suggestion_id"].add(item_id)
+                            record_project_review_item(
+                                db,
+                                project_id=payload.project_id,
+                                group_id=payload.group_id,
+                                document_id=doc_id,
+                                item_id=item_id,
+                                item_type="model_suggestion",
+                                code=item_refs.get("field"),
+                                hypothesis_annotation_id=ann_id,
+                                anchored=bool(((raw.get("target") or [{}])[0].get("selector") or [])),
+                            )
+                        elif tag.startswith("gold_ref_id:"):
+                            item_id = tag.split(":", 1)[1]
+                            refs["gold_ref_id"].add(item_id)
+                            record_project_review_item(
+                                db,
+                                project_id=payload.project_id,
+                                group_id=payload.group_id,
+                                document_id=doc_id,
+                                item_id=item_id,
+                                item_type="gold_reference",
+                                code=item_refs.get("field"),
+                                hypothesis_annotation_id=ann_id,
+                                anchored=bool(((raw.get("target") or [{}])[0].get("selector") or [])),
+                            )
+            except Exception as e:
+                existing_lookup_failed_docs.add(doc_id)
+                emit_prepare_warning(
+                    "Could not verify existing review items for this document; skipping copies for it to avoid duplicates",
+                    document_id=doc_id,
+                    error=str(e),
+                )
+
+            existing_refs_by_doc[doc_id] = refs
+            db.flush()
+            return refs
+
+        if payload.include_model and doc_ids:
+            for ann in model_rows:
+                prepare_done += 1
                 if not ann.document_id:
+                    emit_prepare_progress("copying_model_annotations")
                     continue
                 uri = doc_url.get(ann.document_id) or ann.canonical_url
                 if not uri:
+                    emit_prepare_progress("copying_model_annotations")
+                    continue
+                model_docs_with_annotations.add(ann.document_id)
+                sid, ann_payload = prepare_model_annotation_payload(
+                    group_id=payload.group_id,
+                    project_id=payload.project_id,
+                    doc_id=ann.document_id,
+                    uri=uri,
+                    annotation=ann,
+                )
+                existing_refs = existing_workspace_refs_for_doc(ann.document_id, uri)
+                if ann.document_id in existing_lookup_failed_docs:
+                    skipped_model += 1
+                    emit_prepare_progress("copying_model_annotations")
+                    continue
+                if sid in existing_refs["suggestion_id"]:
+                    skipped_model += 1
+                    emit_prepare_progress("copying_model_annotations")
+                    continue
+                try:
+                    created_ann = hypothesis_create_annotation(ann_payload)
+                except Exception as e:
+                    create_failed += 1
+                    emit_prepare_warning(
+                        "Could not copy model annotation; continuing with the next item",
+                        document_id=ann.document_id,
+                        error=str(e),
+                    )
+                    emit_prepare_progress("copying_model_annotations")
+                    continue
+                created_model += 1
+                existing_refs["suggestion_id"].add(sid)
+                record_project_review_item(
+                    db,
+                    project_id=payload.project_id,
+                    group_id=payload.group_id,
+                    document_id=ann.document_id,
+                    item_id=sid,
+                    item_type="model_annotation",
+                    hypothesis_annotation_id=(created_ann or {}).get("id"),
+                    anchored=bool(ann_payload.get("target")),
+                )
+                if created_model % 25 == 0:
+                    db.commit()
+                if ann_payload.get("target"):
+                    anchored_model += 1
+                else:
+                    unanchored_model += 1
+                emit_prepare_progress("copying_model_annotations")
+
+            solr_doc_total = len(solr_suggestion_docs)
+            for doc_i, (doc_id, pairs) in enumerate(solr_suggestion_docs, start=1):
+                uri = doc_url.get(doc_id)
+                if doc_id in model_docs_with_annotations:
+                    prepare_done += len(pairs)
+                    emit_prepare_progress(
+                        "copying_solr_model_suggestions",
+                        document_i=doc_i,
+                        solr_documents_total=solr_doc_total,
+                        current_document_id=doc_id,
+                    )
+                    continue
+                for code, value, anchor_value in pairs:
+                    prepare_done += 1
+                    selector = find_unique_text_quote_selector(doc_text.get(doc_id, ""), anchor_value)
+                    sid, ann_payload = prepare_model_suggestion_payload(
+                        group_id=payload.group_id,
+                        project_id=payload.project_id,
+                        doc_id=doc_id,
+                        uri=uri,
+                        code=code,
+                        value=value,
+                        anchor_value=anchor_value,
+                        selector=selector,
+                    )
+                    existing_refs = existing_workspace_refs_for_doc(doc_id, uri)
+                    if doc_id in existing_lookup_failed_docs:
+                        skipped_model += 1
+                        emit_prepare_progress(
+                            "copying_solr_model_suggestions",
+                            document_i=doc_i,
+                            solr_documents_total=solr_doc_total,
+                            current_document_id=doc_id,
+                            current_code=code,
+                        )
+                        continue
+                    if sid in existing_refs["suggestion_id"]:
+                        skipped_model += 1
+                        emit_prepare_progress(
+                            "copying_solr_model_suggestions",
+                            document_i=doc_i,
+                            solr_documents_total=solr_doc_total,
+                            current_document_id=doc_id,
+                            current_code=code,
+                        )
+                        continue
+                    try:
+                        created_ann = hypothesis_create_annotation(ann_payload)
+                    except Exception as e:
+                        create_failed += 1
+                        emit_prepare_warning(
+                            "Could not copy model suggestion; continuing with the next item",
+                            document_id=doc_id,
+                            code=code,
+                            error=str(e),
+                        )
+                        emit_prepare_progress(
+                            "copying_solr_model_suggestions",
+                            document_i=doc_i,
+                            solr_documents_total=solr_doc_total,
+                            current_document_id=doc_id,
+                            current_code=code,
+                        )
+                        continue
+                    created_model += 1
+                    existing_refs["suggestion_id"].add(sid)
+                    record_project_review_item(
+                        db,
+                        project_id=payload.project_id,
+                        group_id=payload.group_id,
+                        document_id=doc_id,
+                        item_id=sid,
+                        item_type="model_suggestion",
+                        code=code,
+                        value=value,
+                        hypothesis_annotation_id=(created_ann or {}).get("id"),
+                        anchored=bool(selector),
+                    )
+                    if created_model % 25 == 0:
+                        db.commit()
+                    if selector:
+                        anchored_model += 1
+                    else:
+                        unanchored_model += 1
+                    emit_prepare_progress(
+                        "copying_solr_model_suggestions",
+                        document_i=doc_i,
+                        solr_documents_total=solr_doc_total,
+                        current_document_id=doc_id,
+                        current_code=code,
+                    )
+
+        if payload.include_gold and doc_ids:
+            for ann in gold_rows:
+                prepare_done += 1
+                if not ann.document_id:
+                    emit_prepare_progress("copying_gold_references")
+                    continue
+                uri = doc_url.get(ann.document_id) or ann.canonical_url
+                if not uri:
+                    emit_prepare_progress("copying_gold_references")
                     continue
                 rid, ann_payload = prepare_gold_reference_payload(
                     group_id=payload.group_id,
@@ -3233,12 +3984,44 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
                     uri=uri,
                     annotation=ann,
                 )
-                existing = hypothesis_search_rows(payload.group_id, [f"gold_ref_id:{rid}"], limit=1)
-                if existing:
+                existing_refs = existing_workspace_refs_for_doc(ann.document_id, uri)
+                if ann.document_id in existing_lookup_failed_docs:
                     skipped_gold += 1
+                    emit_prepare_progress("copying_gold_references")
                     continue
-                hypothesis_create_annotation(ann_payload)
+                if rid in existing_refs["gold_ref_id"]:
+                    skipped_gold += 1
+                    emit_prepare_progress("copying_gold_references")
+                    continue
+                try:
+                    created_ann = hypothesis_create_annotation(ann_payload)
+                except Exception as e:
+                    create_failed += 1
+                    emit_prepare_warning(
+                        "Could not copy gold reference; continuing with the next item",
+                        document_id=ann.document_id,
+                        error=str(e),
+                    )
+                    emit_prepare_progress("copying_gold_references")
+                    continue
                 created_gold += 1
+                existing_refs["gold_ref_id"].add(rid)
+                record_project_review_item(
+                    db,
+                    project_id=payload.project_id,
+                    group_id=payload.group_id,
+                    document_id=ann.document_id,
+                    item_id=rid,
+                    item_type="gold_reference",
+                    hypothesis_annotation_id=(created_ann or {}).get("id"),
+                    anchored=bool(ann_payload.get("target")),
+                )
+                if created_gold % 25 == 0:
+                    db.commit()
+                emit_prepare_progress("copying_gold_references")
+
+        emit_prepare_progress("prepare_done")
+        db.commit()
 
         return {
             "ok": True,
@@ -3249,9 +4032,68 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
             "skipped_existing_model_suggestions": skipped_model,
             "created_gold_references": created_gold,
             "skipped_existing_gold_references": skipped_gold,
+            "anchored_model_suggestions": anchored_model,
+            "unanchored_model_suggestions": unanchored_model,
+            "create_failed": create_failed,
         }
     finally:
         db.close()
+
+
+@app.post("/hypothesis/prepare_workspace")
+def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Request):
+    user = get_current_user(request)
+    uid = (user.get("id") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=500, detail="Session user.id missing")
+    is_admin = (user.get("role") or "").lower() == "admin"
+    return run_hypothesis_prepare_workspace(payload, user_id=uid, is_admin=is_admin)
+
+
+@app.post("/hypothesis/prepare_workspace_stream")
+def hypothesis_prepare_workspace_stream(payload: WorkspacePrepareRequest, request: Request):
+    user = get_current_user(request)
+    uid = (user.get("id") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=500, detail="Session user.id missing")
+    is_admin = (user.get("role") or "").lower() == "admin"
+
+    def gen():
+        q: "queue.Queue[str]" = queue.Queue()
+        done = threading.Event()
+
+        def emit(ev: str, d: dict):
+            q.put(sse_event(ev, d))
+
+        def worker():
+            try:
+                result = run_hypothesis_prepare_workspace(
+                    payload,
+                    user_id=uid,
+                    is_admin=is_admin,
+                    emit=emit,
+                )
+                q.put(sse_event("result", result))
+            except HTTPException as e:
+                logger.exception("hypothesis workspace preparation failed")
+                q.put(sse_event("error", {"status_code": e.status_code, "detail": e.detail}))
+            except Exception as e:
+                logger.exception("hypothesis workspace preparation failed")
+                q.put(sse_event("error", {"error": str(e)}))
+            finally:
+                done.set()
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        while not done.is_set() or not q.empty():
+            try:
+                msg = q.get(timeout=1.0)
+                yield msg
+            except queue.Empty:
+                yield ": ping\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.post("/hypothesis/sync_stream")
@@ -3483,6 +4325,14 @@ class AliasCreate(BaseModel):
     alias: str
 
 
+class PendingTagAction(BaseModel):
+    tag: str
+    action: str
+    code: Optional[str] = None
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+
+
 @app.get("/codes")
 def list_codes(include_inactive: bool = False):
     db = SessionLocal()
@@ -3491,7 +4341,7 @@ def list_codes(include_inactive: bool = False):
         if not include_inactive:
             q = q.where(Code.is_active == True)
 
-        codes = db.execute(q).scalars().all()
+        codes = db.execute(q.order_by(Code.version.asc(), Code.code.asc())).scalars().all()
         out = []
         for c in codes:
             aliases = db.execute(select(CodeAlias.alias).where(CodeAlias.code == c.code)).scalars().all()
@@ -3505,6 +4355,180 @@ def list_codes(include_inactive: bool = False):
                 "aliases": aliases,
             })
         return {"codes": out}
+    finally:
+        db.close()
+
+
+@app.get("/codes/pending_tags")
+def list_pending_hypothesis_tags(
+    include_resolved: bool = False,
+    document_id: Optional[str] = None,
+    group_id: Optional[str] = None,
+    project_id: Optional[UUID] = None,
+):
+    db = SessionLocal()
+    try:
+        if document_id:
+            stmt = (
+                select(PendingHypothesisTagOccurrence, PendingHypothesisTag, Document, Project)
+                .join(PendingHypothesisTag, PendingHypothesisTag.tag == PendingHypothesisTagOccurrence.tag)
+                .outerjoin(Document, Document.document_id == PendingHypothesisTagOccurrence.document_id)
+                .outerjoin(Project, Project.project_id == PendingHypothesisTagOccurrence.project_id)
+                .where(PendingHypothesisTagOccurrence.document_id == document_id)
+            )
+            if group_id:
+                stmt = stmt.where(PendingHypothesisTagOccurrence.group_id == group_id)
+            if project_id:
+                stmt = stmt.where(or_(
+                    PendingHypothesisTagOccurrence.project_id == project_id,
+                    PendingHypothesisTagOccurrence.project_id.is_(None),
+                ))
+            if not include_resolved:
+                stmt = stmt.where(PendingHypothesisTag.status == "pending")
+            rows = db.execute(stmt.order_by(PendingHypothesisTagOccurrence.seen_at.desc().nullslast())).all()
+
+            by_tag: dict[str, dict] = {}
+            for occ, pending, doc, project in rows:
+                rec = by_tag.get(occ.tag)
+                if not rec:
+                    rec = {
+                        "tag": occ.tag,
+                        "status": pending.status,
+                        "mapped_code": pending.mapped_code,
+                        "seen_count": 0,
+                        "first_seen_at": "",
+                        "last_seen_at": "",
+                        "last_group_id": occ.group_id,
+                        "last_project_id": str(occ.project_id) if occ.project_id else None,
+                        "last_project_name": project.name if project else None,
+                        "last_project_href": f"/ui/projects?project_id={occ.project_id}" if occ.project_id else None,
+                        "last_document_id": occ.document_id,
+                        "last_document_title": (doc.title if doc else None) or occ.document_id,
+                        "last_document_href": f"/ui/docs/{occ.document_id}" if occ.document_id else None,
+                        "last_user": occ.user,
+                        "last_value": occ.value,
+                        "values": [],
+                        "last_annotation_id": occ.annotation_id,
+                    }
+                    by_tag[occ.tag] = rec
+                rec["seen_count"] += 1
+                if occ.value and occ.value not in rec["values"]:
+                    rec["values"].append(occ.value)
+                if not rec.get("last_seen_at") and occ.seen_at:
+                    rec["last_seen_at"] = occ.seen_at.isoformat()
+                if not rec.get("first_seen_at") and occ.seen_at:
+                    rec["first_seen_at"] = occ.seen_at.isoformat()
+            return {"pending_tags": list(by_tag.values())}
+
+        q = select(PendingHypothesisTag)
+        if not include_resolved:
+            q = q.where(PendingHypothesisTag.status == "pending")
+        rows = (
+            db.execute(
+                q.order_by(PendingHypothesisTag.status.asc(), PendingHypothesisTag.last_seen_at.desc())
+            )
+            .scalars()
+            .all()
+        )
+        doc_ids = [r.last_document_id for r in rows if r.last_document_id]
+        project_ids = [r.last_project_id for r in rows if r.last_project_id]
+        doc_map = {
+            d.document_id: d
+            for d in db.execute(select(Document).where(Document.document_id.in_(doc_ids))).scalars().all()
+        } if doc_ids else {}
+        project_map = {
+            p.project_id: p
+            for p in db.execute(select(Project).where(Project.project_id.in_(project_ids))).scalars().all()
+        } if project_ids else {}
+
+        return {
+            "pending_tags": [
+                {
+                    "tag": r.tag,
+                    "status": r.status,
+                    "mapped_code": r.mapped_code,
+                    "seen_count": r.seen_count,
+                    "first_seen_at": r.first_seen_at.isoformat() if r.first_seen_at else "",
+                    "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else "",
+                    "last_group_id": r.last_group_id,
+                    "last_project_id": str(r.last_project_id) if r.last_project_id else None,
+                    "last_project_name": project_map.get(r.last_project_id).name if r.last_project_id in project_map else None,
+                    "last_project_href": f"/ui/projects?project_id={r.last_project_id}" if r.last_project_id else None,
+                    "last_document_id": r.last_document_id,
+                    "last_document_title": (
+                        doc_map.get(r.last_document_id).title if r.last_document_id in doc_map else None
+                    ) or r.last_document_id,
+                    "last_document_href": f"/ui/docs/{r.last_document_id}" if r.last_document_id else None,
+                    "last_user": r.last_user,
+                    "last_value": r.last_value,
+                    "values": [r.last_value] if r.last_value else [],
+                    "last_annotation_id": r.last_annotation_id,
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        db.close()
+
+
+@app.post("/codes/pending_tags/action")
+def act_on_pending_hypothesis_tag(payload: PendingTagAction):
+    db = SessionLocal()
+    try:
+        tag = normalize_tag(payload.tag)
+        action = (payload.action or "").strip().lower()
+        if not tag:
+            raise HTTPException(400, "tag is empty")
+        if action not in {"approve", "map", "reject"}:
+            raise HTTPException(400, "action must be approve|map|reject")
+
+        row = db.get(PendingHypothesisTag, tag)
+        if not row:
+            row = PendingHypothesisTag(tag=tag, status="pending", seen_count=0)
+            db.add(row)
+
+        if action == "reject":
+            row.status = "rejected"
+            row.mapped_code = None
+            db.commit()
+            return {"ok": True, "tag": tag, "status": row.status}
+
+        code = normalize_tag(payload.code or tag)
+        if not code:
+            raise HTTPException(400, "code is empty")
+
+        if action == "approve":
+            code_row = db.get(Code, code)
+            if code_row:
+                if not code_row.is_active:
+                    code_row.is_active = True
+            else:
+                code_row = Code(
+                    code=code,
+                    version="ext",
+                    display_name=payload.display_name,
+                    description=payload.description,
+                    is_active=True,
+                    is_locked=False,
+                )
+                db.add(code_row)
+            row.status = "approved"
+            row.mapped_code = code
+            db.commit()
+            return {"ok": True, "tag": tag, "status": row.status, "code": code}
+
+        code_row = db.get(Code, code)
+        if not code_row or not code_row.is_active:
+            raise HTTPException(404, "unknown active code")
+        alias_row = db.get(CodeAlias, tag)
+        if alias_row and alias_row.code != code:
+            raise HTTPException(409, f"tag is already mapped to {alias_row.code}")
+        if not alias_row and tag != code:
+            db.add(CodeAlias(alias=tag, code=code))
+        row.status = "mapped"
+        row.mapped_code = code
+        db.commit()
+        return {"ok": True, "tag": tag, "status": row.status, "code": code}
     finally:
         db.close()
 
@@ -3891,13 +4915,14 @@ def fetch_model_export_docs(core: str, doc_ids: list[str]) -> list[dict]:
     if not doc_ids:
         return []
 
-    url = f"{SOLR_BASE_URL}/{core}/select"
     rows: list[dict] = []
 
     chunk_size = 500
     for i in range(0, len(doc_ids), chunk_size):
         chunk = doc_ids[i:i + chunk_size]
-        fq = "(" + " OR ".join([f'document_id_s:"{x}"' for x in chunk]) + ")"
+        fq = "{!terms f=document_id_s}" + ",".join(str(x) for x in chunk if str(x).strip())
+        if not fq.strip():
+            continue
 
         params = {
             "q": "*:*",
@@ -3906,9 +4931,8 @@ def fetch_model_export_docs(core: str, doc_ids: list[str]) -> list[dict]:
             "fl": "document_id_s,code_value_model_kv_ss,code_value_model_norm_kv_ss,has_model_b",
             "wt": "json",
         }
-        r = requests.get(url, params=params, timeout=60)
-        r.raise_for_status()
-        rows.extend(r.json().get("response", {}).get("docs", []))
+        data = solr_select(core, params)
+        rows.extend(data.get("response", {}).get("docs", []))
 
     return rows
 
@@ -6982,6 +8006,14 @@ def group_review_user_allowed(db, group_id: str | None, hypothesis_user: str | N
         return True
     if row:
         return False
+
+    db.add(HypothesisGroupReviewer(
+        group_id=group_id,
+        hypothesis_user=normalized,
+        status="pending",
+        requested_by="hypothesis_sync",
+    ))
+    db.flush()
 
     active_count = db.execute(
         select(func.count())

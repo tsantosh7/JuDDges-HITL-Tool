@@ -120,9 +120,9 @@
   </p>
   <p class="muted">
     Use <b>Show details</b> on a code to see whether the value came from human coding, model coding, or both.
-    If human and model coding disagree, the tool flags this. The agreement test is deliberately strict because
-    it can require the same raw evidence span. You should inspect the text and decide whether the disagreement
-    matters for your research.
+    If human and model coding disagree, the tool flags this by comparing human raw values with model raw values.
+    Small formatting differences are treated as close matches, and the document page shows a similarity score where
+    useful. You should inspect the text and decide whether the remaining disagreement matters for your research.
   </p>
   <p class="muted">
     This is an open science feature: it lets you see the evidence behind the coding, compare human and model
@@ -159,6 +159,75 @@
     shared review group. Reviewers work in that group, and the app syncs trusted reviewer annotations back into
     the server-side reviewed dataset for the selected project.
   </p>
+</div>
+
+<div class="card">
+  <h2>HiTL Workflow at a Glance</h2>
+  <p class="muted">
+    The same shared Hypothesis review group can be reused across projects. The app keeps project work separate
+    using project and document tags, then syncs only approved reviewer annotations back into the selected project.
+  </p>
+
+  <div class="workflow-map">
+    <section class="workflow-lane">
+      <h3>Admin Setup</h3>
+      <div class="workflow-step">
+        <strong>1. Select project</strong>
+        Choose the project that owns the review work.
+      </div>
+      <div class="workflow-arrow">then</div>
+      <div class="workflow-step">
+        <strong>2. Confirm review group</strong>
+        Use the shared group for normal projects, or a restricted group for limited-access projects.
+      </div>
+      <div class="workflow-arrow">then</div>
+      <div class="workflow-step">
+        <strong>3. Approve reviewers</strong>
+        Reviewers submit their Hypothesis username; admins approve trusted accounts before import.
+      </div>
+    </section>
+
+    <section class="workflow-lane">
+      <h3>Reviewer Work</h3>
+      <div class="workflow-step">
+        <strong>4. Open document</strong>
+        Open a project document and turn on the Hypothesis extension.
+      </div>
+      <div class="workflow-arrow">then</div>
+      <div class="workflow-step">
+        <strong>5. Select review group</strong>
+        In the Hypothesis sidebar, use the project review group, not Public.
+      </div>
+      <div class="workflow-arrow">then</div>
+      <div class="workflow-step">
+        <strong>6. Review suggestions</strong>
+        Leave correct suggestions unchanged; reject, correct, or add annotations only when needed.
+      </div>
+    </section>
+
+    <section class="workflow-lane">
+      <h3>Sync and Output</h3>
+      <div class="workflow-step">
+        <strong>7. Sync review group</strong>
+        The app copies missing suggestions and imports approved human annotations for project documents.
+      </div>
+      <div class="workflow-arrow">then</div>
+      <div class="workflow-step">
+        <strong>8. Resolve new tags</strong>
+        Unknown reviewer tags appear as pending tags until an admin maps, approves, or rejects them.
+      </div>
+      <div class="workflow-arrow">then</div>
+      <div class="workflow-step">
+        <strong>9. Export reviewed data</strong>
+        Use <b>Final reviewed dataset</b> after sync to include corrections and implicit accepts.
+      </div>
+    </section>
+  </div>
+
+  <div class="alert">
+    Correct model suggestions do not need an accept annotation. Doing nothing is treated as acceptance unless a
+    reviewer rejects or corrects the suggestion.
+  </div>
 </div>
 
 <div class="card">
@@ -282,6 +351,39 @@
     tells the app which code the annotation belongs to, for example <span class="mono">field:ConvCourtName</span>
     or <span class="mono">ConvCourtName</span>.
   </p>
+</div>
+
+<div class="card">
+  <h2>Model Suggestions, Highlights, and Page Notes</h2>
+  <p class="muted">
+    During sync, the app tries to turn model suggestions into Hypothesis highlights when the suggested value can be
+    found exactly once in the judgment text. These suggestions appear as normal highlighted annotations.
+  </p>
+  <p class="muted">
+    If the suggested value cannot be matched safely, the app keeps the suggestion as a Hypothesis page note. This
+    avoids creating a highlight on the wrong text. Reviewers can still reply to the page note with
+    <span class="mono">reject</span> or a corrected value, or create a new highlighted annotation on the correct
+    evidence.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Codes and Hypothesis Tags</h2>
+  <p class="muted">
+    Creating a tag in the Hypothesis plugin does not automatically create a code in the JuDDGES Tool. The app only
+    counts synced annotation tags as codes when they match an active code in <b>Coding Scheme</b>, or when an alias
+    maps the Hypothesis tag to an active code.
+  </p>
+  <ol>
+    <li>Admins create new project codes in <b>Coding Scheme</b>.</li>
+    <li>Add aliases when reviewers use a different Hypothesis tag spelling.</li>
+    <li>Reviewers use either the canonical code tag or the alias in Hypothesis.</li>
+    <li>Run <b>Sync Project Review Group</b> after review work is saved in Hypothesis.</li>
+  </ol>
+  <div class="alert">
+    If a synced annotation does not appear in the app output, check that the reviewer is approved, the annotation is
+    in the project review group, and the Hypothesis tag matches a code or alias in the app.
+  </div>
 </div>
 
 <div class="card">

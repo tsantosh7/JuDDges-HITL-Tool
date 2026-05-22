@@ -322,15 +322,15 @@
 {% endif %}
 
 {% if user.role == "admin" %}
-<div class="card">
-  <h2>Create / Register a Code</h2>
+  <div class="card">
+  <h2>Create / Register an Extension Code</h2>
   <p class="muted" style="margin-top:-6px;">
-    Create a new tag/code key. For scheme guidance shown to users, either (a) add it to the SCHEME map in this template,
-    or (b) store guidance in the code description field (and it will display under “Stored description”).
+    Original base codes stay locked as v1. New reviewer tags should become extension codes, or aliases to an existing code.
+    Store guidance in the description field until the extension code is promoted into formal scheme guidance.
   </p>
   <form method="post" action="/ui/codes/create">
     <div class="row">
-      <input class="grow" name="code" placeholder="code key (will normalize) e.g., ConvCourtName" required>
+      <input class="grow" name="code" placeholder="extension code key e.g., NewEvidenceType" required>
       <input class="grow" name="display_name" placeholder="display name (optional)">
     </div>
     <div class="row">
@@ -341,6 +341,116 @@
 </div>
 {% endif %}
 
+<div class="card">
+  <h2>Scheme Structure</h2>
+  <div class="row" style="gap:12px; flex-wrap:wrap;">
+    <div style="min-width:220px;">
+      <div class="muted">Original base codelist</div>
+      <div style="font-size:24px; font-weight:700;">{{ base_codes|length }}</div>
+      <div class="muted">Locked v1 codes used by the main reviewed dataset.</div>
+    </div>
+    <div style="min-width:220px;">
+      <div class="muted">Extension codes</div>
+      <div style="font-size:24px; font-weight:700;">{{ extension_codes|length }}</div>
+      <div class="muted">Approved additions created after review.</div>
+    </div>
+    <div style="min-width:220px;">
+      <div class="muted">Pending reviewer tags</div>
+      <div style="font-size:24px; font-weight:700;">{{ pending_tags|length }}</div>
+      <div class="muted">Unresolved Hypothesis tags waiting for an admin decision.</div>
+    </div>
+  </div>
+</div>
+
+<h2>Pending Reviewer Tags</h2>
+<p class="muted">
+  These tags were seen in synced human Hypothesis annotations but do not match an active base code, extension code, or alias yet.
+</p>
+{% if pending_tags and pending_tags|length > 0 %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Tag</th>
+        <th>Status</th>
+        <th>Last Value</th>
+        <th>Seen</th>
+        <th>Last Seen</th>
+        <th>Last Reviewer</th>
+        <th>Last Project</th>
+        <th>Last Document</th>
+        {% if user.role == "admin" %}<th>Decision</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in pending_tags %}
+      <tr>
+        <td><strong>{{ t.tag }}</strong></td>
+        <td><span class="pill">{{ t.status }}</span>{% if t.mapped_code %}<div class="muted">→ {{ t.mapped_code }}</div>{% endif %}</td>
+        <td>
+          {% if t.last_value %}
+            {{ t.last_value }}
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td>{{ t.seen_count }}</td>
+        <td class="muted">{{ t.last_seen_at or "—" }}</td>
+        <td class="mono">{{ t.last_user or "—" }}</td>
+        <td>
+          {% if t.last_project_href and t.last_project_name %}
+            <a href="{{ t.last_project_href }}">{{ t.last_project_name }}</a>
+          {% elif t.last_project_id %}
+            <a href="/ui/projects?project_id={{ t.last_project_id }}">{{ t.last_project_id }}</a>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if t.last_document_href and t.last_document_title %}
+            <a href="{{ t.last_document_href }}">{{ t.last_document_title }}</a>
+          {% elif t.last_document_id %}
+            <a href="/ui/docs/{{ t.last_document_id }}" class="mono">{{ t.last_document_id }}</a>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        {% if user.role == "admin" %}
+        <td class="actions">
+          <form method="post" action="/ui/codes/pending_tag_action" style="margin-bottom:8px;">
+            <input type="hidden" name="tag" value="{{ t.tag }}">
+            <input type="hidden" name="action" value="approve">
+            <input name="code" value="{{ t.tag }}" placeholder="extension code">
+            <button type="submit" class="btnlink">Approve extension</button>
+          </form>
+          <form method="post" action="/ui/codes/pending_tag_action" style="margin-bottom:8px;">
+            <input type="hidden" name="tag" value="{{ t.tag }}">
+            <input type="hidden" name="action" value="map">
+            <select name="code" required>
+              <option value="">Map to existing code...</option>
+              {% for c in codes %}
+                {% if c.is_active %}
+                  <option value="{{ c.code }}">{{ c.code }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+            <button type="submit" class="btnlink">Map alias</button>
+          </form>
+          <form method="post" action="/ui/codes/pending_tag_action">
+            <input type="hidden" name="tag" value="{{ t.tag }}">
+            <input type="hidden" name="action" value="reject">
+            <button class="danger" type="submit">Reject</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="card muted">No pending reviewer tags.</div>
+{% endif %}
+
+{% macro render_code_table(rows) %}
 <table class="table">
   <thead>
     <tr>
@@ -356,7 +466,7 @@
   </thead>
 
   <tbody>
-  {% for c in codes %}
+  {% for c in rows %}
     {% set meta = SCHEME.get(c.code) %}
     <tr>
       <td>
@@ -432,5 +542,18 @@
   {% endfor %}
   </tbody>
 </table>
+{% endmacro %}
+
+<h2>Original Base Codelist</h2>
+<p class="muted">Locked v1 codes. These remain unchanged unless the formal coding scheme changes.</p>
+{{ render_code_table(base_codes) }}
+
+<h2>Extension Codes</h2>
+<p class="muted">Approved additions from reviewer/user tags. These are kept separate from the original base codelist.</p>
+{% if extension_codes and extension_codes|length > 0 %}
+  {{ render_code_table(extension_codes) }}
+{% else %}
+  <div class="card muted">No extension codes yet.</div>
+{% endif %}
 
 {% endblock %}

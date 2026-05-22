@@ -68,11 +68,11 @@
         </option>
       {% endfor %}
     </select>
-    <button type="submit" class="btnlink">Use Project</button>
+    <button type="submit" class="btnlink">Activate Project</button>
 {#    <a class="btnlink" href="/ui/projects{% if selected_project_id %}?project_id={{ selected_project_id }}{% endif %}">Go to Projects</a>#}
   </form>
 
-  <div class="muted" style="margin-top:8px;">Choose the project you want to work in, then select <strong>Use Project</strong> to make it active across Search Documents and Extract Data tabs in the navigation bar.</div>
+  <div class="muted" style="margin-top:8px;">Choose the project you want to work in, then select <strong>Activate Project</strong> to make it active across Search Documents and Extract Data tabs in the navigation bar.</div>
 
   {% if selected_project_name %}
     <div class="meta">
@@ -83,13 +83,13 @@
 </div>
 
 <div class="card">
-  <h2>Edit Project</h2>
+  <h2>View/Edit Project</h2>
 
   {% if selected_project_id %}
     <div class="muted" style="margin-bottom:10px;">
       Edit the active project: <strong>{{ selected_project_name }}</strong>
     </div>
-    <a class="btnlink" href="/ui/projects?project_id={{ selected_project_id }}">Edit Project</a>
+    <a class="btnlink" href="/ui/projects?project_id={{ selected_project_id }}">Go To Project</a>
   {% else %}
     <div class="muted">Select a project first to edit it.</div>
   {% endif %}
