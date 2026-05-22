@@ -4,15 +4,35 @@ import re
 import json
 import argparse
 import random
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
 from json import JSONDecoder
 
-from openai import OpenAI
+import requests
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
 from field_guide import build_field_guide_text
 
 SENTINEL = "data not available"
+
+
+def load_dotenv(path: str = ".env") -> None:
+    if not os.path.exists(path):
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def load_jsonl(path: str) -> List[Dict[str, Any]]:
@@ -151,6 +171,66 @@ def parse_first_json_object(text: str) -> Dict[str, Any]:
     return {"__raw__": text}
 
 
+def response_output_text(data: Dict[str, Any]) -> str:
+    if isinstance(data.get("output_text"), str):
+        return data["output_text"]
+    parts: List[str] = []
+    for item in data.get("output") or []:
+        for content in item.get("content") or []:
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                parts.append(content["text"])
+    return "\n".join(parts)
+
+
+def create_response_text(client, *, model: str, messages: List[Dict[str, str]], schema_cfg: Dict[str, Any]) -> str:
+    text_format = {
+        "format": {
+            "type": "json_schema",
+            "name": schema_cfg["name"],
+            "strict": schema_cfg["strict"],
+            "schema": schema_cfg["schema"],
+        }
+    }
+    payload = {
+        "model": model,
+        "input": messages,
+        "text": text_format,
+    }
+    last_error: Exception | None = None
+
+    for attempt in range(5):
+        try:
+            if client is not None:
+                resp = client.responses.create(model=model, input=messages, text=text_format)
+                return resp.output_text
+
+            api_key = os.getenv("OPENAI_API_KEY", "").strip()
+            if not api_key:
+                raise RuntimeError("OPENAI_API_KEY is not set and the openai Python package is not installed")
+
+            r = requests.post(
+                "https://api.openai.com/v1/responses",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=180,
+            )
+            if r.status_code in {408, 409, 429} or r.status_code >= 500:
+                raise RuntimeError(f"OpenAI transient failure: {r.status_code} {r.text[:1000]}")
+            if r.status_code >= 300:
+                raise RuntimeError(f"OpenAI Responses API failed: {r.status_code} {r.text[:1000]}")
+            return response_output_text(r.json())
+        except Exception as exc:
+            last_error = exc
+            if attempt == 4:
+                break
+            time.sleep(min(30.0, 2.0 ** attempt))
+
+    raise RuntimeError(f"OpenAI request failed after retries: {last_error}")
+
+
 def _norm_for_match(s: str) -> str:
     s = s.replace("\u00a0", " ")
     s = re.sub(r"\s+", " ", s)
@@ -208,6 +288,63 @@ def normalize_pred_keys(pred: Dict[str, Any], expected_fields: List[str]) -> Dic
         else:
             clean[f] = [SENTINEL]
     return clean
+
+
+def predict_one(
+    *,
+    client,
+    row: Dict[str, Any],
+    row_index: int,
+    model: str,
+    system_text: str,
+    fewshot_msgs: List[Dict[str, str]],
+    schema_cfg: Dict[str, Any],
+    expected_fields: List[str],
+    expected_set: set[str],
+    max_doc_chars: int,
+) -> tuple[Dict[str, Any], bool]:
+    doc_id = get_doc_id(row, fallback=f"row_{row_index}")
+
+    doc_text = extract_doc_text(row)
+    if len(doc_text) > max_doc_chars:
+        doc_text = doc_text[:max_doc_chars]
+
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_text}]
+    messages.extend(fewshot_msgs)
+    messages.append({"role": "user", "content": "Extract output_1 for the document below.\n\nDOCUMENT:\n" + doc_text})
+
+    pred_obj = parse_first_json_object(
+        create_response_text(
+            client,
+            model=model,
+            messages=messages,
+            schema_cfg=schema_cfg,
+        )
+    )
+
+    got_keys = set(pred_obj.keys()) if isinstance(pred_obj, dict) else set()
+    if got_keys != expected_set:
+        return {
+            "_type": "prediction",
+            "run_id": "",
+            "document_id": doc_id,
+            "prediction_output_1": pred_obj,
+            "__schema_mismatch__": {
+                "missing": sorted(list(expected_set - got_keys)),
+                "extra": sorted(list(got_keys - expected_set)),
+            },
+        }, False
+
+    pred_obj = enforce_grounding(pred_obj, doc_text, SENTINEL)
+    pred_obj = apply_field_sanity_rules(pred_obj)
+    pred_obj = normalize_pred_keys(pred_obj, expected_fields)
+
+    return {
+        "_type": "prediction",
+        "run_id": "",
+        "document_id": doc_id,
+        "prediction_output_1": pred_obj,
+    }, True
 
 
 def build_system_instructions() -> str:
@@ -270,6 +407,7 @@ def read_existing_predictions(out_path: str) -> Dict[str, Dict[str, Any]]:
 
 
 def main():
+    load_dotenv()
     ap = argparse.ArgumentParser()
     ap.add_argument("--train", default="data/train.finetune.jsonl")
     ap.add_argument("--test", default="data/test.finetune.jsonl")
@@ -282,9 +420,10 @@ def main():
     ap.add_argument("--max_example_chars", type=int, default=9000)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--workers", type=int, default=1, help="Parallel OpenAI requests. Keep low to respect rate limits.")
     args = ap.parse_args()
 
-    client = OpenAI()
+    client = OpenAI() if OpenAI is not None else None
 
     train_rows = load_jsonl(args.train)
     test_rows = load_jsonl(args.test)
@@ -342,67 +481,48 @@ def main():
     skipped = 0
 
     with open(out_path, "a", encoding="utf-8") as out_f:
+        pending: list[tuple[int, Dict[str, Any]]] = []
         for i, row in enumerate(test_rows):
             doc_id = get_doc_id(row, fallback=f"row_{i}")
-
             if args.resume and doc_id in existing:
                 skipped += 1
                 continue
+            pending.append((i, row))
 
-            doc_text = extract_doc_text(row)
-            if len(doc_text) > args.max_doc_chars:
-                doc_text = doc_text[: args.max_doc_chars]
-
-            messages: List[Dict[str, str]] = [{"role": "system", "content": system_text}]
-            messages.extend(fewshot_msgs)
-            messages.append({"role": "user", "content": "Extract output_1 for the document below.\n\nDOCUMENT:\n" + doc_text})
-
-            resp = client.responses.create(
-                model=args.model,
-                input=messages,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": schema_cfg["name"],
-                        "strict": schema_cfg["strict"],
-                        "schema": schema_cfg["schema"],
-                    }
-                },
-            )
-
-            pred_obj = parse_first_json_object(resp.output_text)
-
-            got_keys = set(pred_obj.keys()) if isinstance(pred_obj, dict) else set()
-            if got_keys != expected_set:
-                out_row = {
-                    "_type": "prediction",
-                    "run_id": run_id,
-                    "document_id": doc_id,
-                    "prediction_output_1": pred_obj,
-                    "__schema_mismatch__": {
-                        "missing": sorted(list(expected_set - got_keys)),
-                        "extra": sorted(list(got_keys - expected_set)),
-                    },
-                }
-                out_f.write(json.dumps(out_row, ensure_ascii=False) + "\n")
-                # raise RuntimeError("Schema mismatch detected. Stopping to avoid further spend.")
-                continue
-
-            pred_obj = enforce_grounding(pred_obj, doc_text, SENTINEL)
-            pred_obj = apply_field_sanity_rules(pred_obj)
-            pred_obj = normalize_pred_keys(pred_obj, expected_fields)
-
-            out_row = {
-                "_type": "prediction",
-                "run_id": run_id,
-                "document_id": doc_id,
-                "prediction_output_1": pred_obj,
-            }
+        def write_result(out_row: Dict[str, Any], ok: bool) -> None:
+            nonlocal written
+            out_row["run_id"] = run_id
             out_f.write(json.dumps(out_row, ensure_ascii=False) + "\n")
-            written += 1
-
-            if (written % 10) == 0:
+            out_f.flush()
+            if ok:
+                written += 1
+            if written and (written % 10) == 0:
                 print(f"Progress: wrote {written} (skipped {skipped}) / {total}")
+
+        def submit_kwargs(i: int, row: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                "client": client,
+                "row": row,
+                "row_index": i,
+                "model": args.model,
+                "system_text": system_text,
+                "fewshot_msgs": fewshot_msgs,
+                "schema_cfg": schema_cfg,
+                "expected_fields": expected_fields,
+                "expected_set": expected_set,
+                "max_doc_chars": args.max_doc_chars,
+            }
+
+        if max(1, args.workers) == 1:
+            for i, row in pending:
+                out_row, ok = predict_one(**submit_kwargs(i, row))
+                write_result(out_row, ok)
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+                futures = [pool.submit(predict_one, **submit_kwargs(i, row)) for i, row in pending]
+                for future in as_completed(futures):
+                    out_row, ok = future.result()
+                    write_result(out_row, ok)
 
     print(f"Done. Wrote {written}, skipped {skipped}. Saved: {out_path}")
 
