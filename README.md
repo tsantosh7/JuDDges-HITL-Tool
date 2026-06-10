@@ -4,6 +4,12 @@ Open-science human-in-the-loop tooling for searching legal judgments, reviewing 
 
 This repository contains a FastAPI web application backed by Postgres and Solr. It is designed around the JuDDGES corpus of appeal court judgments from the Criminal Division of the Court of Appeal of England and Wales. Documents are ingested once, indexed for search, grouped into researcher projects, reviewed with Hypothesis, compared with model outputs, and exported for downstream analysis.
 
+## Licence
+
+This repository is shared under the [Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International licence](https://creativecommons.org/licenses/by-nc-nd/4.0/) (`CC BY-NC-ND 4.0`), unless otherwise stated. See [LICENSE](LICENSE) for the full legal code.
+
+Commercial use, hosted services, sublicensing, or redistribution of modified versions requires prior written permission from the JuDDGES project team.
+
 ## What This Project Does
 
 The app supports:
