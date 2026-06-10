@@ -28,6 +28,15 @@ a:hover{text-decoration:underline}
   padding:16px;
 }
 
+.site-footer{
+  max-width:1100px;
+  margin:0 auto;
+  padding:0 16px 18px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.5;
+}
+
 .topbar{
   display:flex;
   align-items:center;
