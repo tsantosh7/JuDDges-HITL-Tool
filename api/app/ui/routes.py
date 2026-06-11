@@ -1350,7 +1350,7 @@ def _value_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, left, right).ratio()
 
 
-def _agreement_summary(human_values: List[str], model_values: List[str], threshold: float = 0.90) -> dict:
+def _agreement_summary(human_values: List[str], model_values: List[str], threshold: float = 0.80) -> dict:
     human_normed = {_agreement_norm(v) for v in human_values if _agreement_norm(v)}
     model_normed = {_agreement_norm(v) for v in model_values if _agreement_norm(v)}
     if not human_normed or not model_normed:
@@ -1366,6 +1366,18 @@ def _agreement_summary(human_values: List[str], model_values: List[str], thresho
     if best >= threshold:
         return {"disagree": False, "score": best, "status": "close"}
     return {"disagree": True, "score": best, "status": "disagree"}
+
+
+def _dedupe_values(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for value in values:
+        value_str = str(value or "").strip()
+        if not value_str or value_str in seen:
+            continue
+        seen.add(value_str)
+        out.append(value_str)
+    return out
 
 
 def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
@@ -1401,19 +1413,19 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
         if disagree:
             disagree_count += 1
 
-        best = None
+        best_values: List[str] = []
         src = None
         if hn:
-            best = hn[0]
+            best_values = _dedupe_values(hn)
             src = "human"
         elif hr:
-            best = hr[0]
+            best_values = _dedupe_values(hr)
             src = "human"
         elif mn:
-            best = mn[0]
+            best_values = _dedupe_values(mn)
             src = "model"
         elif mr:
-            best = mr[0]
+            best_values = _dedupe_values(mr)
             src = "model"
 
         if has_human and has_model:
@@ -1428,7 +1440,7 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
                 "human_norm": hn,
                 "model_raw": mr,
                 "model_norm": mn,
-                "best": best,
+                "best_values": best_values,
                 "source": src,
                 "disagree": disagree,
                 "agreement_score": agreement["score"],

@@ -20,7 +20,7 @@ BASE_DESCRIPTIONS: Dict[str, str] = {
     "RemandDecision": "Remand decision post-conviction/remand stage (verbatim).",
     "RemandCustodyTime": "Duration of any remand in custody (verbatim).",
     "SentCourtName": "Name(s) of the court where the defendant was sentenced (verbatim).",
-    "Sentence": "Sentence(s) imposed (verbatim).",
+    "Sentence": "Original Sentence(s) Received.",
     "SentServe": "How sentences run (verbatim: concurrent/consecutive/combination or exact phrasing).",
     "WhatAncillary": "Ancillary orders applied by the court (verbatim).",
 

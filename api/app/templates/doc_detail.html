@@ -228,7 +228,7 @@
       <thead>
         <tr>
           <th style="width:220px;">Code</th>
-          <th>Best value (prefers human normalized)</th>
+          <th>Best value(s) (prefers human normalized)</th>
           <th style="width:120px;">Source</th>
           <th style="width:140px;">Notes</th>
         </tr>
@@ -240,8 +240,10 @@
           <td class="mono"><strong>{{ r.code }}</strong></td>
 
           <td>
-            {% if r.best %}
-              {{ r.best }}
+            {% if r.best_values and r.best_values|length > 0 %}
+              {% for v in r.best_values %}
+                <span class="pill">{{ v }}</span>
+              {% endfor %}
             {% else %}
               <span class="muted">—</span>
             {% endif %}
