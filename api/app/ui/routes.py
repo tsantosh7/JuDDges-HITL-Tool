@@ -24,6 +24,7 @@ from sqlalchemy import select, text, func
 from app.models import (
     TopicRun, DocumentTopic, UserHypothesisWorkspace, HypothesisGroup,
     ProjectHypothesisReviewGroup,
+    ProjectReviewItem,
 )
 from app.models import ProjectDocument  # ensure imported
 
@@ -1380,7 +1381,10 @@ def _dedupe_values(values: List[str]) -> List[str]:
     return out
 
 
-def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+def build_codes_view(
+    doc: Dict[str, Any],
+    project_model_values: Dict[str, List[str]] | None = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     def _first_present(*keys: str) -> Any:
         for k in keys:
             if k in doc and doc.get(k) is not None:
@@ -1392,6 +1396,12 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
     model_raw = _kv_list_to_map(_first_present("code_value_model_kv_ss", "code_values_model_kv_ss"))
     model_norm = _kv_list_to_map(_first_present("code_value_model_norm_kv_ss", "code_values_model_norm_kv_ss"))
 
+    for code, values in (project_model_values or {}).items():
+        if not code:
+            continue
+        model_raw.setdefault(code, []).extend(values or [])
+        model_norm.setdefault(code, []).extend(values or [])
+
     all_codes: Set[str] = set(human_raw) | set(human_norm) | set(model_raw) | set(model_norm)
 
     rows: List[Dict[str, Any]] = []
@@ -1400,16 +1410,16 @@ def build_codes_view(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[st
     for code in sorted(all_codes):
         hr = human_raw.get(code, [])
         hn = human_norm.get(code, [])
-        mr = model_raw.get(code, [])
-        mn = model_norm.get(code, [])
+        mr = _dedupe_values(model_raw.get(code, []))
+        mn = _dedupe_values(model_norm.get(code, []))
 
         has_human = bool(hr or hn)
         has_model = bool(mr or mn)
 
-        human_compare_values = hr
-        model_compare_values = mr
+        human_compare_values = hn
+        model_compare_values = mn
         agreement = _agreement_summary(human_compare_values, model_compare_values)
-        disagree = bool(hr and mr and agreement["disagree"])
+        disagree = bool(hn and mn and agreement["disagree"])
         if disagree:
             disagree_count += 1
 
@@ -1616,7 +1626,31 @@ async def ui_doc_detail(request: Request, document_id: str, user=Depends(require
     #     )
     #     topics = topics_res.get("topics", []) or []
 
-    codes_view, code_stats = build_codes_view(doc)
+    project_model_values: dict[str, list[str]] = {}
+    if project_id and WORK_GID:
+        db = SessionLocal()
+        try:
+            rows = (
+                db.execute(
+                    select(ProjectReviewItem.code, ProjectReviewItem.value)
+                    .where(ProjectReviewItem.project_id == UUID(str(project_id)))
+                    .where(ProjectReviewItem.group_id == WORK_GID)
+                    .where(ProjectReviewItem.document_id == document_id)
+                    .where(ProjectReviewItem.item_type.in_(["model_suggestion", "model_annotation"]))
+                    .where(ProjectReviewItem.code.is_not(None))
+                    .where(ProjectReviewItem.value.is_not(None))
+                )
+                .all()
+            )
+            for code, value in rows:
+                code_s = str(code or "").strip()
+                value_s = str(value or "").strip()
+                if code_s and value_s:
+                    project_model_values.setdefault(code_s, []).append(value_s)
+        finally:
+            db.close()
+
+    codes_view, code_stats = build_codes_view(doc, project_model_values=project_model_values)
     back_url_raw = request.query_params.get("back_url") or request.headers.get("referer")
     back_url = _normalize_back_url(back_url_raw) or f"/ui/search?core={core}"
 
@@ -2061,15 +2095,25 @@ async def ui_hypothesis_reviewers_save(
 @router.get("/hypothesis/sync_workspace", response_class=HTMLResponse)
 async def ui_hypothesis_sync_workspace_page(
     request: Request,
+    project_id: str | None = None,
     user=Depends(require_paid_user),
 ):
     uid = user.get("id") or user.get("user_id") or user.get("sub")
     if not uid:
         raise HTTPException(401, "Not authenticated")
 
-    project_id = _get_project_id(request)
+    project_id = project_id or _get_project_id(request)
     if not project_id:
         return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    project_name = _get_project_name(request)
+    try:
+        project_res = await asgi_get(request, f"/projects/{project_id}", params={})
+        project_name = project_res.get("name") or project_name
+        _set_project_id(request, project_id)
+        _set_project_name(request, project_name)
+    except Exception:
+        pass
 
     review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
     group_id = review_res.get("group_id")
@@ -2106,10 +2150,63 @@ async def ui_hypothesis_sync_workspace_page(
             "request": request,
             "user": user,
             "project_id": project_id,
-            "project_name": _get_project_name(request),
+            "project_name": project_name,
             "group_id": group_id,
             "sync_payload": payload,
             "prepare_payload": prepare_payload,
+        },
+    )
+
+
+@router.get("/hypothesis/propagate_tags", response_class=HTMLResponse)
+async def ui_hypothesis_propagate_tags_page(
+    request: Request,
+    project_id: str | None = None,
+    user=Depends(require_role("admin", "reviewer")),
+):
+    project_id = project_id or _get_project_id(request)
+    if not project_id:
+        return RedirectResponse("/ui/dashboard?msg=Please%20select%20a%20project%20first", status_code=303)
+
+    project_name = _get_project_name(request)
+    try:
+        project_res = await asgi_get(request, f"/projects/{project_id}", params={})
+        project_name = project_res.get("name") or project_name
+        _set_project_id(request, project_id)
+        _set_project_name(request, project_name)
+    except Exception:
+        pass
+
+    review_res = await asgi_get(request, "/hypothesis/project_review_group", params={"project_id": project_id})
+    group_id = review_res.get("group_id")
+    if not group_id:
+        return RedirectResponse(
+            "/ui/settings/hypothesis?msg=Set%20the%20project%20review%20group%20first",
+            status_code=303,
+        )
+
+    payload = {
+        "project_id": project_id,
+        "group_id": group_id,
+        "model": os.getenv("OPENAI_PROPAGATION_MODEL", "gpt-4o-mini"),
+        "min_examples": 1,
+        "examples": 5,
+        "max_docs": 0,
+        "max_codes": 0,
+        "max_values_per_doc_code": 5,
+        "max_doc_chars": 45000,
+        "execute": True,
+    }
+
+    return request.app.state.templates.TemplateResponse(
+        "hypothesis_propagate.html",
+        {
+            "request": request,
+            "user": user,
+            "project_id": project_id,
+            "project_name": project_name,
+            "group_id": group_id,
+            "propagate_payload": payload,
         },
     )
 

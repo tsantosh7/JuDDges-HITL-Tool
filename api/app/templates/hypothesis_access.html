@@ -129,12 +129,11 @@
   <h2>Step 5 — Start reviewing documents</h2>
 
   <p class="muted">
-    Go to Search Documents, open a document, activate Hypothesis in your browser,
-    and select the shared review group in the Hypothesis sidebar before adding annotations.
+    Return to the project page to view/edit project details and open documents for review.
   </p>
 
-  <a class="btnlink" href="/ui/search">
-    Go to Search Documents
+  <a class="btnlink" href="/ui/projects{% if project_id %}?project_id={{ project_id|urlencode }}{% endif %}">
+    Back to project
   </a>
 </div>
 

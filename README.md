@@ -6,7 +6,7 @@ This repository contains a FastAPI web application backed by Postgres and Solr. 
 
 ## Licence
 
-This repository is shared under the [Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International licence](https://creativecommons.org/licenses/by-nc-nd/4.0/) (`CC BY-NC-ND 4.0`), unless otherwise stated. See [LICENSE](LICENSE) for the full legal code.
+This repository is shared under the [Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International licence](https://creativecommons.org/licenses/by-nc-nd/4.0/) (`CC BY-NC-ND 4.0`). See [LICENSE](LICENSE) for the full legal code.
 
 Commercial use, hosted services, sublicensing, or redistribution of modified versions requires prior written permission from the JuDDGES project team.
 
@@ -308,7 +308,7 @@ The normal workflow is:
 2. Set `HYPOTHESIS_DEFAULT_REVIEW_GROUP_ID` to the shared private review group, for example `b3DQXoX4`.
 3. Reviewers join the shared Hypothesis group and request access with their Hypothesis username.
 4. Admins approve, block, or leave reviewer requests pending at the review-group level.
-5. For a selected project, sync copies model suggestions and gold references into the shared group only for documents in that project.
+5. For a selected project, sync copies model suggestions and gold standard items into the shared group only for documents in that project.
 6. Reviewers leave correct suggestions unchanged, reject wrong suggestions, correct incomplete values, or add missing annotations.
 7. Sync imports human review annotations only from approved Hypothesis users and only for documents in the selected project.
 8. Export uses the project scope so researchers can extract reviewed values for their own project without corrupting source model or gold annotations.

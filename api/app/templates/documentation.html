@@ -3,68 +3,111 @@
 
 <h1>Help</h1>
 
-<div class="card">
-  <h2>What the JuDDGES HiTL Tool Does</h2>
+<div class="card" style="border-left:4px solid #2563eb;">
+  <h2>Feedback</h2>
   <p class="muted">
-    JuDDGES helps researchers search appeal judgments, collect documents into projects, review model-suggested
-    codes, and export structured research data. The usual workflow is:
+    Please tell us about bugs, confusing steps, missing features, or anything that would make JuDDGES easier to use.
   </p>
-  <div class="meta">
-    <span class="pill">Create or select project</span>
-    <span class="pill">Search documents</span>
-    <span class="pill">Review model suggestions</span>
-    <span class="pill">Sync Hypothesis</span>
-    <span class="pill">Export final data</span>
-  </div>
-  <p class="muted">
-    Correct model suggestions do not need extra comments. Human review is only needed when a suggestion is wrong,
-    incomplete, missing, or needs a new code.
-  </p>
+  <a class="btnlink" href="https://docs.google.com/forms/d/e/1FAIpQLSdlPk6KuYXLmG6zlMdhE1cv88HBy6B64r_HnCTX17tzNzhchw/viewform?usp=sharing&amp;ouid=109210411074641716755" target="_blank" rel="noopener">
+    Open user feedback form
+  </a>
 </div>
 
 <div class="card">
-  <h2>Getting Started</h2>
+  <h2>What JuDDGES Does</h2>
+  <p class="muted">
+    JuDDGES helps researchers search Court of Appeal judgments, collect documents into projects, inspect extracted
+    coding values, review model suggestions, add extension codes, and export structured research data.
+  </p>
+  <div class="meta">
+    <span class="pill">Create or select project</span>
+    <span class="pill">Check coding scheme</span>
+    <span class="pill">Search documents</span>
+    <span class="pill">Inspect extracted values</span>
+    <span class="pill">Review with Hypothesis</span>
+    <span class="pill">Export data</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Basic Workflow Without HiTL</h2>
   <ol>
     <li>Log in to <a href="https://juddges.org/" target="_blank" rel="noopener">https://juddges.org/</a>.</li>
-    <li>Use <b>My Projects</b> to create or select the project you are working on.</li>
-    <li>Open <b>Coding Scheme</b> if you need to check variable descriptions and examples.</li>
-    <li>Use <b>Search Documents</b> to find judgments and add relevant documents to your project.</li>
-    <li>Open a document to inspect available human/model values and any disagreement flags.</li>
-    <li>Use <b>Extract Data</b> when the project is ready for export.</li>
+    <li>Open <b>My Projects</b>. Create a project, or select an existing project and choose <b>Activate Project</b>.</li>
+    <li>Use <b>View/Edit Project</b> to open the Project page, edit details, and see documents already added.</li>
+    <li>Open <b>Coding Scheme</b> before searching. Use <b>View guidance</b> to check code descriptions, possible values, and examples.</li>
+    <li>Open <b>Search Documents</b>, enter a keyword, choose where to search, and use filters such as scope, coding source, or code.</li>
+    <li>Add relevant results to your project. If there are several result pages, add documents from each page you need.</li>
+    <li>Open a document from search results or from the Project page to inspect citation details, excerpt, and extracted codes.</li>
+    <li>When ready, use <b>Extract Data</b> to export all codes, base codes, or extension codes in long or wide CSV format.</li>
   </ol>
+</div>
+
+<div class="card">
+  <h2>Project Page</h2>
+  <p class="muted">
+    The Project page is different from <b>My Projects</b>. It is where you view/edit one selected project, inspect the
+    project document list, run <b>Sync Project</b>, and, for reviewers/admins, run <b>Propagate Approved Tags</b>.
+  </p>
+  <ul>
+    <li><b>Edit project details</b>: update the project name and description.</li>
+    <li><b>Documents in project</b>: open documents already added to the project.</li>
+    <li><b>Sync Project</b>: sync all documents in the project with the selected Hypothesis review group.</li>
+    <li><b>Propagate Approved Tags</b>: use approved extension-code examples to create model suggestions across the project for human review.</li>
+  </ul>
 </div>
 
 <div class="card">
   <h2>Reading the Document Detail Page</h2>
   <p class="muted">
-    The document page shows codes identified for the judgment. The main value column prefers human-normalized
-    values, then human raw values, then model-normalized values, then model raw values. If a variable has more than
-    one applicable normalized value, all values are shown.
+    The document page shows codes identified for the judgment. The main value column prefers human-normalized values,
+    then human raw values, then model-normalized values, then model raw values. If multiple normalized values apply,
+    all values are shown.
   </p>
-  <p class="muted">
-    Use <b>Show details</b> to inspect the human and model values separately. If human and model values are at least
-    80% similar after normalisation, the page treats them as a close match rather than a disagreement.
-  </p>
+  <ul>
+    <li>Use <b>Show details</b> to compare human and model values separately.</li>
+    <li>The similarity score is calculated from normalized values.</li>
+    <li>A score of at least 80% is treated as a close match rather than a disagreement.</li>
+    <li>Use <b>Open Document</b> to open the full judgment for Hypothesis review.</li>
+    <li>Use <b>Sync This Document</b> after making Hypothesis changes on this one document.</li>
+  </ul>
 </div>
 
 <div class="card">
-  <h2>Human-in-the-Loop Review</h2>
+  <h2>Set Up Hypothesis for HiTL Review</h2>
   <p class="muted">
-    HiTL review uses Hypothesis as the annotation layer. The JuDDGES tool copies model suggestions into the selected
-    project review group, reviewers make corrections in Hypothesis, and the tool imports approved reviewer work back
-    into the project during sync.
+    HiTL review uses the Hypothesis browser extension as the annotation layer. A separate Chrome profile is recommended
+    so review work is isolated from personal or work browsing accounts.
   </p>
   <ol>
-    <li>Open <b>Hypothesis Tool</b> for browser setup, login, group joining, and review-access instructions.</li>
-    <li>Open the document from JuDDGES using <b>Open Document</b>.</li>
-    <li>Activate the Hypothesis extension and select the project review group, not Public.</li>
-    <li>Read each model suggestion against the judgment text.</li>
-    <li>Only add a reply or annotation when the model suggestion is wrong, incomplete, or missing.</li>
-    <li>Run <b>Sync Project Review Group</b> after review work has been saved in Hypothesis.</li>
+    <li>Use Chrome, or install it from <a href="https://www.google.com/intl/en_uk/chrome/" target="_blank" rel="noopener">Google Chrome</a>.</li>
+    <li>Create a Guest Chrome profile or a dedicated review profile.</li>
+    <li>Install the Hypothesis extension or bookmarklet from the <b>Hypothesis Tool</b> page.</li>
+    <li>If Chrome asks whether the extension can access website data, allow it. For tighter control, set site access to <b>When you click the extension</b>.</li>
+    <li>Open <b>Hypothesis Tool</b>, join the review group, and request/manage review access if needed.</li>
+    <li>Always select the project review group in Hypothesis, not Public.</li>
   </ol>
   <div class="alert">
-    If Hypothesis login does not work on a National Archives judgment page, open <a href="https://www.google.com/" target="_blank" rel="noopener">google.com</a>, activate the Hypothesis extension there, log in, then return to the judgment page.
+    If Hypothesis will not activate on a National Archives judgment page, open
+    <a href="https://www.google.com/" target="_blank" rel="noopener">google.com</a>, activate Hypothesis and log in there,
+    then return to the judgment page and select the project review group.
   </div>
+</div>
+
+<div class="card">
+  <h2>Viewing Hypothesis Annotations</h2>
+  <ol>
+    <li>On the Project page, use <b>Sync Project</b> to copy model suggestions and gold standard items into the project review group.</li>
+    <li>Open a document from the Project page or Search Documents.</li>
+    <li>Click <b>Open Document</b> on the document detail page.</li>
+    <li>Click the Hypothesis <span class="mono">h.</span> button in the browser, then open the sidebar.</li>
+    <li>Check that the correct review group is selected.</li>
+    <li>Click an annotation card or highlighted text to focus on one annotation. Use <b>Clear filter</b> in Hypothesis to show all annotations again.</li>
+  </ol>
+  <p class="muted">
+    Some annotations appear as page notes when the tool cannot uniquely anchor the exact text in the judgment. These
+    should still be reviewed against the judgment text.
+  </p>
 </div>
 
 <div class="card">
@@ -73,42 +116,56 @@
     <thead>
       <tr>
         <th>Situation</th>
-        <th>What to do</th>
-        <th>What happens in export</th>
+        <th>What to do in Hypothesis</th>
+        <th>What happens in JuDDGES</th>
       </tr>
     </thead>
     <tbody>
       <tr>
         <td>The model suggestion is correct</td>
-        <td>Do nothing!!! Leave the model suggestion unchanged. Do not add an accept comment or duplicate annotation.</td>
-        <td>It is treated as an implicit accept.</td>
+        <td>Do nothing. Leave the model suggestion unchanged.</td>
+        <td>The unchanged model suggestion is treated as an implicit accept.</td>
       </tr>
       <tr>
-        <td>The model suggestion is wrong but you are unsure/don't know the correct answer</td>
-        <td>Reply to the model suggestion with <span class="mono">reject</span>, or add the tag <span class="mono">review:reject</span>. Use this when the value should not be exported but you cannot provide a replacement.</td>
-        <td>The rejected model value is no longer visible/used.</td>
+        <td>The model suggestion is wrong and you do not know the correct answer</td>
+        <td>Reply with <span class="mono">reject</span>, or add the tag <span class="mono">review:reject</span>.</td>
+        <td>The rejected model value is excluded from the reviewed output.</td>
       </tr>
       <tr>
         <td>The model suggestion is wrong and you know the correct answer</td>
-        <td>Reply to the model suggestion with the corrected value. This is preferred because the tool can inherit the correct field from the original suggestion.</td>
-        <td>The human (your) correction takes priority over the model value.</td>
+        <td>Reply to the model suggestion with the corrected value. You may use <span class="mono">corrected: value</span>.</td>
+        <td>Your correction takes priority over the model value.</td>
       </tr>
       <tr>
-        <td>You want to add a new code for the model to learn</td>
-        <td>Highlight the text exemplifying the code, create a new annotation, enter the value if needed, and add the correct field tag, for example <span class="mono">field:Sentence</span> or <span class="mono">Sentence</span>. Save it in the project review group.</td>
-        <td>The new human annotation is included if the reviewer is approved by the tool administrator.</td>
+        <td>A useful code/value is missing</td>
+        <td>Highlight the relevant text, create a new annotation, add the value if needed, and add a field tag such as <span class="mono">field:OffenceLocation</span>.</td>
+        <td>The tag appears as a pending reviewer tag until it is approved or mapped in the Coding Scheme.</td>
       </tr>
     </tbody>
   </table>
+  <p class="muted">
+    After rejecting, correcting, or adding annotations, run <b>Sync This Document</b> from the document page or
+    <b>Sync Project</b> from the Project page so JuDDGES imports the latest Hypothesis work.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Extension Codes and Propagation</h2>
+  <ol>
+    <li>Create new extension-code examples in Hypothesis by highlighting text and adding a clear field tag.</li>
+    <li>Sync the document or project so the new tag appears in <b>Coding Scheme</b> as a pending reviewer tag.</li>
+    <li>Approved extension codes remain separate from the locked Original Base Codelist.</li>
+    <li>Reviewers/admins can use <b>Propagate Approved Tags</b> on the Project page to create model suggestions for similar values in other project documents.</li>
+    <li>Propagated suggestions are still suggestions. Reviewers should accept implicitly, correct, or reject them through the normal HiTL workflow.</li>
+  </ol>
 </div>
 
 <div class="card">
   <h2>Sync and Export</h2>
   <ol>
-    <li>Select the correct project in <b>My Projects</b>.</li>
-    <li>Open <b>Hypothesis Tool</b>.</li>
-    <li>Use <b>Sync Project Review Group</b> to copy missing model suggestions and import approved human review annotations.</li>
-    <li>Refresh document pages if you want to inspect imported values.</li>
+    <li>Use <b>Sync This Document</b> when you have only changed one document.</li>
+    <li>Use <b>Sync Project</b> when you need to prepare or refresh all documents in the selected project.</li>
+    <li>Refresh document pages if you want to inspect imported values after sync.</li>
     <li>Use <b>Extract Data</b> and choose <b>Final reviewed dataset</b> for normal HiTL output.</li>
   </ol>
   <p class="muted">
@@ -124,7 +181,8 @@
     <li>Read the underlying judgment text before rejecting or correcting a suggestion.</li>
     <li>Leave correct suggestions unchanged.</li>
     <li>Prefer replying to an existing model suggestion when rejecting or correcting.</li>
-    <li>Use the correct field tag when creating a brand-new annotation.</li>
+    <li>Use clear field tags when creating brand-new annotations.</li>
+    <li>Only correct a suggestion when you are confident in the answer.</li>
     <li>Run sync again before exporting if new review work has been added.</li>
   </ul>
 </div>
@@ -135,7 +193,7 @@
   <h3>I cannot see annotations in Hypothesis.</h3>
   <p class="muted">
     Check that you have joined the review group, opened the Hypothesis extension, and selected the project review
-    group in the Hypothesis sidebar. Ask an admin to run sync if suggestions have not yet been copied into the group.
+    group in the Hypothesis sidebar. Run <b>Sync Project</b> if suggestions have not yet been copied into the group.
   </p>
 
   <h3>I submitted my Hypothesis username. Why are my annotations not imported?</h3>
@@ -149,21 +207,20 @@
     No. Correct model suggestions are accepted implicitly by leaving them unchanged.
   </p>
 
-  <h3>What if I made a mistake when rejecting and/or correcting a model suggestion, or when adding a new code?</h3>
+  <h3>What if I made a mistake?</h3>
   <p class="muted">
-    Just delete the comment and the model will revert back to before. Then run sync again so the tool imports the
-    current Hypothesis state.
+    Edit or delete the Hypothesis reply/annotation, then run sync again so JuDDGES imports the current Hypothesis state.
   </p>
 
   <h3>What if I type the wrong tag?</h3>
   <p class="muted">
     Edit or delete the Hypothesis annotation, then save it with the correct field tag and run sync again. If the tag
-    is genuinely new, an administrator may need to add or approve it in the Coding Scheme.
+    is genuinely new, it may need to be approved or mapped in the Coding Scheme.
   </p>
 
   <h3>What should I export?</h3>
   <p class="muted">
-    For normal research use after review, choose <b>Final reviewed dataset</b>. Use human-only, gold-only,
+    For normal research use after review, choose <b>Final reviewed dataset</b>. Use human-only, gold-standard-only,
     model-only, or all-source exports only when auditing or troubleshooting.
   </p>
 </div>

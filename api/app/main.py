@@ -64,6 +64,13 @@ from .models import (
     ProjectDocumentReview, TopicRun, DocumentTopic, DocEmbedding,
 )
 
+from .propagation import (
+    PropagationExample,
+    PropagationTarget,
+    build_propagated_suggestion_payload,
+    extract_values_with_openai,
+)
+
 from app.topics.service import get_or_create_active_global_run
 
 
@@ -176,7 +183,7 @@ def source_type_for_annotation(fields: dict, group_role: str | None) -> str:
     tags = {str(t).strip().lower() for t in (fields.get("tags") or []) if str(t).strip()}
     if "source:model_suggestion" in tags:
         return "model_suggestion"
-    if "source:gold_reference" in tags:
+    if "source:gold_standard" in tags or "source:gold_reference" in tags:
         return "gold_reference"
     if "source:model" in tags:
         return "model"
@@ -683,6 +690,9 @@ SYSTEM_TAG_PREFIXES = (
     "gold_ref_id:",
     "field:",
     "anchored:",
+    "propagation:",
+    "example_count:",
+    "model:",
 )
 SYSTEM_TAGS = {
     "bot:hitl",
@@ -1660,6 +1670,20 @@ class WorkspacePrepareRequest(BaseModel):
     include_gold: bool = True
     max_per_doc: int = 80
     limit_per_request: int = 200
+
+
+class PropagateApprovedTagsRequest(BaseModel):
+    project_id: UUID
+    group_id: str
+    code: Optional[str] = None
+    model: str = "gpt-4o-mini"
+    min_examples: int = 1
+    examples: int = 5
+    max_docs: int = 0
+    max_codes: int = 0
+    max_values_per_doc_code: int = 5
+    max_doc_chars: int = 45_000
+    execute: bool = True
 
 
 # Optional: if your frontend expects these (Fix 2)
@@ -2829,15 +2853,11 @@ def prepare_model_suggestion_payload(
 ) -> tuple[str, dict]:
     sid = stable_workspace_suggestion_id("model", project_id, doc_id, code, value)
     tags = [
-        "source:model_suggestion",
-        "bot:hitl",
-        "status:suggested",
-        "implicit_accept:true",
-        "anchored:quote" if selector else "anchored:none",
-        f"project_id:{project_id}",
-        f"doc_id:{doc_id}",
         f"field:{code}",
-        f"suggestion_id:{sid}",
+        "source:model_suggestion",
+        "status:suggested",
+        "anchored:quote" if selector else "anchored:none",
+        "bot:hitl",
     ]
     raw_anchor = (anchor_value or "").strip()
     text_lines = [
@@ -2887,19 +2907,20 @@ def prepare_model_annotation_payload(
         annotation.annotation_id,
         annotation.text or annotation.exact or "",
     )
-    tags = [
-        "source:model_suggestion",
-        "bot:hitl",
-        "status:suggested",
-        "implicit_accept:true",
-        f"project_id:{project_id}",
-        f"doc_id:{doc_id}",
-        f"suggestion_id:{sid}",
-    ]
+    inherited_tags: list[str] = []
     for tag in annotation.tags or []:
         s = str(tag).strip()
-        if s and not s.lower().startswith("source:"):
-            tags.append(s)
+        lc = s.lower()
+        if not s or lc.startswith("source:") or lc.startswith("project_id:") or lc.startswith("doc_id:") or lc.startswith("suggestion_id:"):
+            continue
+        inherited_tags.append(s)
+    field_tags = [tag for tag in inherited_tags if tag.lower().startswith("field:")]
+    other_tags = [tag for tag in inherited_tags if not tag.lower().startswith("field:")]
+    tags = field_tags + [
+        "source:model_suggestion",
+        "status:suggested",
+        "bot:hitl",
+    ] + other_tags
 
     text = (
         "[MODEL SUGGESTION]\n"
@@ -2946,23 +2967,25 @@ def prepare_gold_reference_payload(
         annotation.annotation_id,
         annotation.text or annotation.exact or "",
     )
-    tags = [
-        "source:gold_reference",
-        "bot:hitl",
-        "status:reference",
-        f"project_id:{project_id}",
-        f"doc_id:{doc_id}",
-        f"gold_ref_id:{rid}",
-    ]
+    inherited_tags: list[str] = []
     for tag in annotation.tags or []:
         s = str(tag).strip()
-        if s and not s.lower().startswith("source:"):
-            tags.append(s)
+        lc = s.lower()
+        if not s or lc.startswith("source:") or lc.startswith("project_id:") or lc.startswith("doc_id:") or lc.startswith("gold_ref_id:"):
+            continue
+        inherited_tags.append(s)
+    field_tags = [tag for tag in inherited_tags if tag.lower().startswith("field:")]
+    other_tags = [tag for tag in inherited_tags if not tag.lower().startswith("field:")]
+    tags = field_tags + [
+        "source:gold_standard",
+        "status:reference",
+        "bot:hitl",
+    ] + other_tags
 
     text = (
-        "[GOLD REFERENCE]\n"
+        "[GOLD STANDARD]\n"
         f"{annotation.text or annotation.exact or ''}\n\n"
-        "This is copied into the project review group as reference material. It is not counted as your human annotation."
+        "This is copied into the project review group as gold standard material. It is not counted as your human annotation."
     )
     payload = {
         "group": group_id,
@@ -3998,7 +4021,7 @@ def run_hypothesis_prepare_workspace(
                 except Exception as e:
                     create_failed += 1
                     emit_prepare_warning(
-                        "Could not copy gold reference; continuing with the next item",
+                        "Could not copy gold standard item; continuing with the next item",
                         document_id=ann.document_id,
                         error=str(e),
                     )
@@ -4048,6 +4071,362 @@ def hypothesis_prepare_workspace(payload: WorkspacePrepareRequest, request: Requ
         raise HTTPException(status_code=500, detail="Session user.id missing")
     is_admin = (user.get("role") or "").lower() == "admin"
     return run_hypothesis_prepare_workspace(payload, user_id=uid, is_admin=is_admin)
+
+
+def load_approved_extension_examples_for_propagation(
+    db,
+    *,
+    project_id: UUID,
+    group_id: str,
+    code_filter: str | None = None,
+) -> dict[str, list[PropagationExample]]:
+    canon_version, alias_to_canon, key_to_canon = load_code_maps(db)
+    examples: dict[str, list[PropagationExample]] = {}
+    rows = (
+        db.execute(
+            select(HypothesisAnnotation)
+            .join(ProjectDocument, ProjectDocument.document_id == HypothesisAnnotation.document_id)
+            .where(ProjectDocument.project_id == project_id)
+            .where(HypothesisAnnotation.group_id == group_id)
+            .where(HypothesisAnnotation.source_type == "human")
+            .where(HypothesisAnnotation.document_id.is_not(None))
+            .order_by(HypothesisAnnotation.updated.desc().nullslast())
+        )
+        .scalars()
+        .all()
+    )
+
+    for ann in rows:
+        tags = _normalize_tags(ann.tags)
+        if has_reject_review_marker(tags):
+            continue
+        value = review_value_from_annotation(ann.text, ann.exact)
+        if not value:
+            continue
+        for tag in tags:
+            canonical = resolve_tag_to_canonical(tag, canon_version, alias_to_canon, key_to_canon)
+            if not canonical:
+                continue
+            if canon_version.get(canonical) == "v1":
+                continue
+            if code_filter and canonical != code_filter:
+                continue
+            examples.setdefault(canonical, []).append(
+                PropagationExample(
+                    annotation_id=ann.annotation_id,
+                    document_id=ann.document_id or "",
+                    code=canonical,
+                    value=value,
+                    exact=ann.exact or "",
+                    prefix=ann.prefix or "",
+                    suffix=ann.suffix or "",
+                )
+            )
+    return examples
+
+
+def load_project_propagation_targets(db, *, project_id: UUID) -> list[PropagationTarget]:
+    rows = (
+        db.execute(
+            select(Document)
+            .join(ProjectDocument, ProjectDocument.document_id == Document.document_id)
+            .where(ProjectDocument.project_id == project_id)
+            .order_by(Document.document_id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    targets: list[PropagationTarget] = []
+    for doc in rows:
+        canonical_url = normalize_url(doc.canonical_url) or doc.canonical_url
+        if not doc.document_id or not canonical_url or not doc.content_text:
+            continue
+        targets.append(
+            PropagationTarget(
+                document_id=doc.document_id,
+                canonical_url=canonical_url,
+                content_text=doc.content_text,
+            )
+        )
+    return targets
+
+
+def load_propagation_skip_state(
+    db,
+    *,
+    project_id: UUID,
+    group_id: str,
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]], set[str]]:
+    canon_version, alias_to_canon, key_to_canon = load_code_maps(db)
+    blocked: set[tuple[str, str]] = set()
+    human_active: set[tuple[str, str]] = set()
+    existing_suggestion_ids: set[str] = set()
+
+    rows = (
+        db.execute(
+            select(HypothesisAnnotation)
+            .join(ProjectDocument, ProjectDocument.document_id == HypothesisAnnotation.document_id)
+            .where(ProjectDocument.project_id == project_id)
+            .where(HypothesisAnnotation.group_id == group_id)
+            .where(HypothesisAnnotation.document_id.is_not(None))
+        )
+        .scalars()
+        .all()
+    )
+    project_tag = f"project_id:{project_id}"
+    for ann in rows:
+        doc_id = ann.document_id or ""
+        tags = _normalize_tags(ann.tags)
+        refs = extract_project_review_item_refs(tags)
+        if refs.get("suggestion_id") and project_tag in set(tags):
+            existing_suggestion_ids.add(refs["suggestion_id"])
+        for tag in tags:
+            canonical = resolve_tag_to_canonical(tag, canon_version, alias_to_canon, key_to_canon)
+            if not canonical:
+                continue
+            if ann.source_type == "human" and has_reject_review_marker(tags):
+                blocked.add((doc_id, canonical))
+            elif ann.source_type == "human":
+                human_active.add((doc_id, canonical))
+
+    item_rows = (
+        db.execute(
+            select(ProjectReviewItem.item_id)
+            .where(ProjectReviewItem.project_id == project_id)
+            .where(ProjectReviewItem.group_id == group_id)
+        )
+        .scalars()
+        .all()
+    )
+    existing_suggestion_ids.update(str(item_id) for item_id in item_rows if item_id)
+    return blocked, human_active, existing_suggestion_ids
+
+
+def run_propagate_approved_tags(payload: PropagateApprovedTagsRequest, *, user: dict, emit=None) -> dict:
+    role = (user.get("role") or "").lower()
+    if role not in {"admin", "reviewer"}:
+        raise HTTPException(status_code=403, detail="Only admins and reviewers can propagate approved tags")
+
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not set on the API server")
+
+    code_filter = normalize_tag(payload.code or "") or None
+    min_examples = max(1, int(payload.min_examples or 1))
+    examples_limit = max(1, int(payload.examples or 1))
+    max_values = max(1, int(payload.max_values_per_doc_code or 1))
+    max_doc_chars = max(1000, int(payload.max_doc_chars or 45_000))
+
+    def _emit(ev: str, data: dict):
+        if emit:
+            emit(ev, data)
+
+    db = SessionLocal()
+    try:
+        project = db.get(Project, payload.project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        review_group = db.get(ProjectHypothesisReviewGroup, payload.project_id)
+        if not review_group or review_group.group_id != payload.group_id:
+            raise HTTPException(status_code=400, detail="Project review group does not match this project")
+
+        examples_by_code = load_approved_extension_examples_for_propagation(
+            db,
+            project_id=payload.project_id,
+            group_id=payload.group_id,
+            code_filter=code_filter,
+        )
+        targets = load_project_propagation_targets(db, project_id=payload.project_id)
+        blocked, human_active, existing_suggestion_ids = load_propagation_skip_state(
+            db,
+            project_id=payload.project_id,
+            group_id=payload.group_id,
+        )
+
+        codes = [
+            code for code, examples in sorted(examples_by_code.items())
+            if len({ex.document_id for ex in examples}) >= min_examples
+        ]
+        if payload.max_codes:
+            codes = codes[: max(0, int(payload.max_codes))]
+        if payload.max_docs:
+            targets = targets[: max(0, int(payload.max_docs))]
+
+        total_pairs = len(codes) * len(targets)
+        done_pairs = 0
+        planned = created = skipped = errors = anchored = unanchored = 0
+
+        _emit("scope", {
+            "project_id": str(payload.project_id),
+            "project_name": project.name,
+            "group_id": payload.group_id,
+            "codes_total": len(codes),
+            "documents_total": len(targets),
+            "total_pairs": total_pairs,
+            "execute": bool(payload.execute),
+        })
+
+        for code_i, code in enumerate(codes, start=1):
+            examples = examples_by_code[code][:examples_limit]
+            _emit("code_start", {
+                "code": code,
+                "code_i": code_i,
+                "codes_total": len(codes),
+                "examples": len(examples),
+            })
+            for doc_i, target in enumerate(targets, start=1):
+                done_pairs += 1
+                if (target.document_id, code) in blocked or (target.document_id, code) in human_active:
+                    skipped += 1
+                    _emit("progress", {
+                        "phase": "skipped_reviewed",
+                        "code": code,
+                        "document_id": target.document_id,
+                        "done_pairs": done_pairs,
+                        "total_pairs": total_pairs,
+                        "planned": planned,
+                        "created": created,
+                        "skipped": skipped,
+                        "errors": errors,
+                    })
+                    continue
+
+                try:
+                    values = extract_values_with_openai(
+                        api_key=api_key,
+                        model=payload.model,
+                        code=code,
+                        examples=examples,
+                        target=target,
+                        max_doc_chars=max_doc_chars,
+                        timeout=180,
+                    )[:max_values]
+                    if not values:
+                        skipped += 1
+                    for value in values:
+                        selector = find_unique_text_quote_selector(target.content_text, value)
+                        suggestion_id, ann_payload = build_propagated_suggestion_payload(
+                            group_id=payload.group_id,
+                            project_id=str(payload.project_id),
+                            target=target,
+                            code=code,
+                            value=value,
+                            selector=selector,
+                            example_count=len(examples),
+                            model=payload.model,
+                        )
+                        if suggestion_id in existing_suggestion_ids:
+                            skipped += 1
+                            continue
+                        planned += 1
+                        if payload.execute:
+                            created_ann = hypothesis_create_annotation(ann_payload)
+                            annotation_id = (created_ann or {}).get("id")
+                            created += 1
+                            existing_suggestion_ids.add(suggestion_id)
+                            record_project_review_item(
+                                db,
+                                project_id=payload.project_id,
+                                group_id=payload.group_id,
+                                document_id=target.document_id,
+                                item_id=suggestion_id,
+                                item_type="model_suggestion",
+                                code=code,
+                                value=value,
+                                hypothesis_annotation_id=annotation_id,
+                                anchored=bool(selector),
+                            )
+                        if selector:
+                            anchored += 1
+                        else:
+                            unanchored += 1
+                    if planned and planned % 25 == 0:
+                        db.commit()
+                    _emit("progress", {
+                        "phase": "document_done",
+                        "code": code,
+                        "document_id": target.document_id,
+                        "document_i": doc_i,
+                        "documents_total": len(targets),
+                        "done_pairs": done_pairs,
+                        "total_pairs": total_pairs,
+                        "values": len(values),
+                        "planned": planned,
+                        "created": created,
+                        "skipped": skipped,
+                        "errors": errors,
+                        "anchored": anchored,
+                        "unanchored": unanchored,
+                    })
+                except Exception as exc:
+                    errors += 1
+                    _emit("warning", {
+                        "message": "Could not propagate this code/document pair",
+                        "code": code,
+                        "document_id": target.document_id,
+                        "error": str(exc),
+                    })
+
+        db.commit()
+        result = {
+            "ok": True,
+            "project_id": str(payload.project_id),
+            "group_id": payload.group_id,
+            "model": payload.model,
+            "codes": len(codes),
+            "documents": len(targets),
+            "planned": planned,
+            "created": created,
+            "skipped": skipped,
+            "errors": errors,
+            "anchored": anchored,
+            "unanchored": unanchored,
+            "execute": bool(payload.execute),
+        }
+        _emit("done", result)
+        return result
+    finally:
+        db.close()
+
+
+@app.post("/hypothesis/propagate_tags")
+def hypothesis_propagate_tags(payload: PropagateApprovedTagsRequest, request: Request):
+    return run_propagate_approved_tags(payload, user=get_current_user(request))
+
+
+@app.post("/hypothesis/propagate_tags_stream")
+def hypothesis_propagate_tags_stream(payload: PropagateApprovedTagsRequest, request: Request):
+    user = get_current_user(request)
+
+    def gen():
+        q: "queue.Queue[str]" = queue.Queue()
+        done = threading.Event()
+
+        def emit(ev: str, data: dict):
+            q.put(sse_event(ev, data))
+
+        def worker():
+            try:
+                result = run_propagate_approved_tags(payload, user=user, emit=emit)
+                q.put(sse_event("result", result))
+            except HTTPException as exc:
+                logger.exception("approved tag propagation failed")
+                q.put(sse_event("error", {"status_code": exc.status_code, "detail": exc.detail}))
+            except Exception as exc:
+                logger.exception("approved tag propagation failed")
+                q.put(sse_event("error", {"error": str(exc)}))
+            finally:
+                done.set()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        while not done.is_set() or not q.empty():
+            try:
+                yield q.get(timeout=1.0)
+            except queue.Empty:
+                yield ": ping\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.post("/hypothesis/prepare_workspace_stream")
@@ -4512,6 +4891,12 @@ def act_on_pending_hypothesis_tag(payload: PendingTagAction):
                     is_locked=False,
                 )
                 db.add(code_row)
+            if tag != code:
+                alias_row = db.get(CodeAlias, tag)
+                if alias_row and alias_row.code != code:
+                    raise HTTPException(409, f"tag is already mapped to {alias_row.code}")
+                if not alias_row:
+                    db.add(CodeAlias(alias=tag, code=code))
             row.status = "approved"
             row.mapped_code = code
             db.commit()
@@ -5182,7 +5567,7 @@ def export_csv(
                     elif gold_rec:
                         rec = gold_rec
                         source_label = "gold"
-                        value_mode = "gold_reference"
+                        value_mode = "gold_standard"
                     elif (doc_id, canonical_code) not in rejected and model_rec:
                         rec = model_rec
                         source_label = "model_implicit_accept"

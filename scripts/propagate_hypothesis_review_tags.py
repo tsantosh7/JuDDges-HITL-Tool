@@ -408,17 +408,12 @@ def load_blocked_and_existing(conn, project_id: str, group_id: str) -> tuple[set
 def build_payload(group_id: str, project_id: str, target: TargetDoc, code: str, value: str, selector: dict | None, example_count: int) -> tuple[str, dict]:
     sid = stable_suggestion_id(project_id, target.document_id, code, value)
     tags = [
-        "source:model_suggestion",
-        "bot:hitl",
-        "status:suggested",
-        "implicit_accept:true",
-        "propagation:hypothesis_review_examples",
-        f"example_count:{example_count}",
-        "anchored:quote" if selector else "anchored:none",
-        f"project_id:{project_id}",
-        f"doc_id:{target.document_id}",
         f"field:{code}",
-        f"suggestion_id:{sid}",
+        "source:model_suggestion",
+        "status:suggested",
+        "propagation:hypothesis_review_examples",
+        "anchored:quote" if selector else "anchored:none",
+        "bot:hitl",
     ]
     payload = {
         "group": group_id,

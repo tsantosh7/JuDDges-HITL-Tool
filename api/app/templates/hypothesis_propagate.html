@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Propagate Approved Tags</h1>
+
+<div class="card">
+  <div class="muted" style="font-size:12px; margin-bottom:8px;">
+    Project: <strong>{{ project_name or project_id }}</strong>
+    <span class="mono">({{ project_id }})</span>
+  </div>
+  <div class="muted" style="font-size:12px; margin-bottom:12px;">
+    Project review group: <span class="mono">{{ group_id }}</span>
+  </div>
+
+  <div style="height:14px; background:#e5e7eb; border-radius:7px; overflow:hidden;">
+    <div id="propagate-bar" style="height:14px; width:0%; background:#2563eb;"></div>
+  </div>
+
+  <div id="propagate-status" class="muted" style="margin-top:12px;">Preparing approved extension tags...</div>
+
+  <div class="meta" style="margin-top:12px;">
+    <span class="pill">codes: <span id="propagate-codes">0</span></span>
+    <span class="pill">documents: <span id="propagate-docs">0</span></span>
+    <span class="pill">planned: <span id="propagate-planned">0</span></span>
+    <span class="pill">created: <span id="propagate-created">0</span></span>
+    <span class="pill">skipped: <span id="propagate-skipped">0</span></span>
+    <span class="pill">errors: <span id="propagate-errors">0</span></span>
+  </div>
+
+  <pre id="propagate-log" class="mono" style="white-space:pre-wrap; margin-top:12px; max-height:280px; overflow:auto;"></pre>
+
+  <div class="row" style="gap:10px; margin-top:12px;">
+    <a class="btnlink" href="/ui/projects?project_id={{ project_id|urlencode }}">Back to project</a>
+    <a class="btnlink" href="/ui/hypothesis/sync_workspace?project_id={{ project_id|urlencode }}">Sync Project</a>
+  </div>
+</div>
+
+<script>
+const propagatePayload = {{ propagate_payload | tojson }};
+const bar = document.getElementById("propagate-bar");
+const statusEl = document.getElementById("propagate-status");
+const codesEl = document.getElementById("propagate-codes");
+const docsEl = document.getElementById("propagate-docs");
+const plannedEl = document.getElementById("propagate-planned");
+const createdEl = document.getElementById("propagate-created");
+const skippedEl = document.getElementById("propagate-skipped");
+const errorsEl = document.getElementById("propagate-errors");
+const logEl = document.getElementById("propagate-log");
+
+function logLine(text) {
+  logEl.textContent += text + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setPercent(done, total) {
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  bar.style.width = pct + "%";
+}
+
+async function readSse(response, onEvent) {
+  if (!response.ok || !response.body) {
+    let data = {};
+    try { data = await response.json(); } catch (_) {}
+    throw new Error(data.detail || "Request failed: " + response.status);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+
+    const events = buffer.split("\n\n");
+    buffer = events.pop() || "";
+
+    for (const rawEvent of events) {
+      const eventLine = rawEvent.split("\n").find(line => line.startsWith("event:"));
+      const dataLine = rawEvent.split("\n").find(line => line.startsWith("data:"));
+      if (!dataLine) continue;
+      const eventName = eventLine ? eventLine.slice(6).trim() : "message";
+      const data = JSON.parse(dataLine.slice(5).trim());
+      onEvent(eventName, data);
+    }
+  }
+}
+
+async function runPropagation() {
+  try {
+    statusEl.textContent = "Running propagation with OpenAI...";
+    logLine("Loading approved extension-code examples.");
+    const response = await fetch("/hypothesis/propagate_tags_stream", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(propagatePayload)
+    });
+
+    await readSse(response, (eventName, data) => {
+      if (eventName === "scope") {
+        codesEl.textContent = data.codes_total || 0;
+        docsEl.textContent = data.documents_total || 0;
+        setPercent(0, data.total_pairs || 0);
+        logLine("Scope: " + (data.codes_total || 0) + " approved extension codes across " + (data.documents_total || 0) + " documents.");
+      } else if (eventName === "code_start") {
+        statusEl.textContent = "Propagating " + data.code + " (" + data.code_i + "/" + data.codes_total + ").";
+        logLine("Code: " + data.code + " using " + data.examples + " reviewer example(s).");
+      } else if (eventName === "progress") {
+        setPercent(data.done_pairs || 0, data.total_pairs || 0);
+        plannedEl.textContent = data.planned || 0;
+        createdEl.textContent = data.created || 0;
+        skippedEl.textContent = data.skipped || 0;
+        errorsEl.textContent = data.errors || 0;
+      } else if (eventName === "warning") {
+        errorsEl.textContent = Number(errorsEl.textContent || 0) + 1;
+        logLine("Warning: " + (data.message || "Propagation warning") + " " + (data.code || "") + " " + (data.document_id || "") + (data.error ? " (" + data.error + ")" : ""));
+      } else if (eventName === "done" || eventName === "result") {
+        bar.style.width = "100%";
+        statusEl.textContent = "Propagation complete.";
+        plannedEl.textContent = data.planned || 0;
+        createdEl.textContent = data.created || 0;
+        skippedEl.textContent = data.skipped || 0;
+        errorsEl.textContent = data.errors || 0;
+        logLine("Done: " + (data.created || 0) + " suggestions created, " + (data.skipped || 0) + " skipped, " + (data.errors || 0) + " errors.");
+      } else if (eventName === "error") {
+        throw new Error(data.detail || data.error || "Propagation failed");
+      }
+    });
+  } catch (err) {
+    statusEl.textContent = "Propagation failed.";
+    logLine(String(err.message || err));
+  }
+}
+
+runPropagation();
+</script>
+
+{% endblock %}

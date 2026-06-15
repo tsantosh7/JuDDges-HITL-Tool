@@ -112,6 +112,17 @@
             </div>
           </form>
         </details>
+
+        <div class="row" style="margin-top:12px;">
+          <a class="btnlink" href="/ui/hypothesis/sync_workspace?project_id={{ active_project.project_id|urlencode }}">
+            Sync Project
+          </a>
+          {% if user and user.role in ["admin", "reviewer"] %}
+            <a class="btnlink" href="/ui/hypothesis/propagate_tags?project_id={{ active_project.project_id|urlencode }}">
+              Propagate Approved Tags
+            </a>
+          {% endif %}
+        </div>
       </div>
 
       <div class="card">

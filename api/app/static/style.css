@@ -28,15 +28,6 @@ a:hover{text-decoration:underline}
   padding:16px;
 }
 
-.site-footer{
-  max-width:1100px;
-  margin:0 auto;
-  padding:0 16px 18px;
-  color:var(--muted);
-  font-size:12px;
-  line-height:1.5;
-}
-
 .topbar{
   display:flex;
   align-items:center;
@@ -49,6 +40,41 @@ a:hover{text-decoration:underline}
   position:sticky;
   top:0;
   z-index:10;
+}
+
+.license-strip{
+  border-bottom:1px solid var(--border);
+  background:#f9fafb;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.5;
+}
+
+.license-strip-inner{
+  max-width:1100px;
+  margin:0 auto;
+  padding:8px 16px;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  text-align:center;
+}
+
+.license-strip a{
+  font-weight:600;
+}
+
+.license-pill{
+  display:inline-flex;
+  align-items:center;
+  min-height:22px;
+  padding:2px 8px;
+  border:1px solid var(--border);
+  border-radius:999px;
+  background:#fff;
+  color:var(--muted);
 }
 
 .brandlink{color:var(--text); text-decoration:none; font-weight:800; letter-spacing:.3px}

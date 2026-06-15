@@ -213,7 +213,7 @@ def main() -> None:
     parser.add_argument("--any-user", action="store_true", help="Delete matching bot-tagged rows even if not owned by this token user")
     parser.add_argument(
         "--source-tags",
-        default="source:model_suggestion,source:gold_reference",
+        default="source:model_suggestion,source:gold_standard,source:gold_reference",
         help="Comma-separated source tags to delete",
     )
     args = parser.parse_args()

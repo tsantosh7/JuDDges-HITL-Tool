@@ -29,7 +29,7 @@
 
   <div class="row" style="gap:10px; margin-top:12px;">
     <a class="btnlink" href="/ui/settings/hypothesis">Review group settings</a>
-    <a class="btnlink" href="/ui/search">Back to search</a>
+    <a class="btnlink" href="/ui/projects?project_id={{ project_id|urlencode }}">Back to project</a>
   </div>
 </div>
 
@@ -109,7 +109,7 @@ function updatePrepareProgress(data) {
   const docI = Number(data.document_i || 0);
   const createdModel = Number(data.created_model_suggestions || 0);
   const skippedModel = Number(data.skipped_existing_model_suggestions || 0);
-  const createdGold = Number(data.created_gold_references || 0);
+    const createdGold = Number(data.created_gold_references || 0);
   const anchored = Number(data.anchored_model_suggestions || 0);
   const unanchored = Number(data.unanchored_model_suggestions || 0);
   const failed = Number(data.create_failed || 0);
@@ -136,7 +136,7 @@ function updatePrepareProgress(data) {
   } else if (data.phase === "copying_model_annotations") {
     statusEl.textContent = "Copying anchored model annotations " + done + "/" + total + etaText(lastPercent) + ".";
   } else if (data.phase === "copying_gold_references") {
-    statusEl.textContent = "Copying gold references " + done + "/" + total + etaText(lastPercent) + ".";
+    statusEl.textContent = "Copying gold standard items " + done + "/" + total + etaText(lastPercent) + ".";
   } else if (data.phase === "prepare_done") {
     statusEl.textContent =
       "Preparation complete: " + createdModel + " model suggestions copied, " +
@@ -186,7 +186,7 @@ function updateProgress(data) {
 async function runSync() {
   try {
     setOverallPercent(3);
-    statusEl.textContent = "Copying model suggestions and gold references into the project review group...";
+    statusEl.textContent = "Copying model suggestions and gold standard items into the project review group...";
     logLine("Preparing project review items...");
     const prepareResponse = await fetch("/hypothesis/prepare_workspace_stream", {
       method: "POST",
@@ -206,7 +206,7 @@ async function runSync() {
       (prepareData.created_model_suggestions || 0) + " model suggestions copied, " +
       (prepareData.anchored_model_suggestions || 0) + " highlighted, " +
       (prepareData.unanchored_model_suggestions || 0) + " page notes, " +
-      (prepareData.created_gold_references || 0) + " gold references copied, " +
+      (prepareData.created_gold_references || 0) + " gold standard items copied, " +
       (prepareData.skipped_existing_model_suggestions || 0) + " existing suggestions skipped, " +
       (prepareData.create_failed || 0) + " copy failures."
     );
